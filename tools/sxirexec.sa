@@ -10,6 +10,12 @@
 //   ./tools/sxirexec run <audit.ir> <data.bin> <patch.bin> [-- <args...>]
 //   ./tools/sxirexec compile-and-run <in.sa> <work_dir> [-- <args...>]
 //   ./tools/sxirexec parity <in.sa> <work_dir>
+//   ./tools/sxirexec debug <in.sa> <work_dir> <script|->
+//   ./tools/sxirexec debug-bundle <prog.ir> <data.bin> <patch.bin> <script|->
+//
+// The last two are the source-level debugger (docs/DEBUGGER.md): they run the
+// same interpreter as `run`, with breakpoints and stepping switched on by a
+// command script, or with "-" to read commands from stdin.
 
 make fail_ir(code: num, msg: str) -> num {
   hold w = write_file("/dev/stderr", concat("sxirexec: ", concat(msg, "\n")))
@@ -984,7 +990,434 @@ make check_no_x86_regs(body: str) -> num {
   give bad
 }
 
-make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> num {
+// ---- Debugger ---------------------------------------------------------------
+// A debugging session is a script of one command per line, or "-" to read
+// commands from stdin. The state that has to survive between two stop points is
+// one small number list, because a Sayanox list holds numbers only:
+//   [0] line cursor        [1] steps still to retire   [2] quit requested
+//   [3] stop count         [4] call depth for "next"   [5] "next" armed
+//   [6] instructions retired
+
+make dbg_hex1(v: num) -> str {
+  hold d = v % 16
+  when d < 10 {
+    give chr(48 + d)
+  }
+  give chr(87 + d)
+}
+
+make dbg_hex(v: num) -> str {
+  hold x = v
+  when x <= 0 {
+    give "0"
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 16
+    out = concat(dbg_hex1(d), out)
+    // Subtract first: `/` is floating point, and (x - d) / 16 is exact, so the
+    // quotient is the integer the digit was taken from.
+    x = (x - d) / 16
+  }
+  give out
+}
+
+// Six hex digits, the width emit_to_ir writes source offsets in; "--------"
+// when there is no source offset for this instruction.
+make dbg_hex6(v: num) -> str {
+  when v < 0 {
+    give "--------"
+  }
+  hold out = dbg_hex(v)
+  while len(out) < 6 {
+    out = concat("0", out)
+  }
+  give out
+}
+
+make dbg_hex64(hi: num, lo: num) -> str {
+  hold low = dbg_hex(lo)
+  hold pad = 0
+  while pad < 8 && len(low) < 8 {
+    low = concat("0", low)
+    pad = pad + 1
+  }
+  when hi == 0 {
+    give low
+  }
+  give concat(dbg_hex(hi), low)
+}
+
+// One command line: "" when the script is exhausted, or when stdin gives an
+// empty line (an empty line on stdin means "resume"). Blank lines and lines
+// starting with '#' are skipped in a script.
+make dbg_line(text: str, st: list) -> str {
+  when len(text) == 0 {
+    give trim_ir(read_line())
+  }
+  hold n = len(text)
+  hold pos = st[0]
+  while pos < n {
+    hold e = find_ch_ir(text, 10, pos)
+    when e < 0 {
+      e = n
+    }
+    hold line = trim_ir(slice_ir(text, pos, e))
+    pos = e + 1
+    when len(line) > 0 && sx_index(line, 0) != 35 {
+      st[0] = pos
+      give line
+    }
+  }
+  st[0] = pos
+  give ""
+}
+
+make dbg_word(line: str) -> str {
+  hold sp = find_ch_ir(line, 32, 0)
+  when sp < 0 {
+    give line
+  }
+  give slice_ir(line, 0, sp)
+}
+
+make dbg_rest(line: str) -> str {
+  hold sp = find_ch_ir(line, 32, 0)
+  when sp < 0 {
+    give ""
+  }
+  give trim_ir(slice_ir(line, sp + 1, len(line)))
+}
+
+make dbg_is_dec(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make dbg_is_hex(s: str) -> num {
+  hold n = len(s)
+  when n == 0 || n > 8 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    when hex_val_ir(sx_index(s, i)) < 0 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// "12" decimal, "-1" decimal, "0x2a1" hex; -1 means "not a number".
+make dbg_num(tok: str) -> num {
+  hold n = len(tok)
+  when n == 0 {
+    give 0 - 1
+  }
+  hold c0 = sx_index(tok, 0)
+  when n > 2 && c0 == 48 {
+    hold c1 = sx_index(tok, 1)
+    when c1 == 120 || c1 == 88 {
+      hold hex = slice_ir(tok, 2, n)
+      when dbg_is_hex(hex) == 0 {
+        give 0 - 1
+      }
+      give parse_hex32_ir(hex)
+    }
+  }
+  hold neg = 0
+  hold start = 0
+  when c0 == 45 {
+    neg = 1
+    start = 1
+  }
+  when dbg_is_dec(slice_ir(tok, start, n)) == 0 {
+    give 0 - 1
+  }
+  hold v = parse_signed_dec(tok)
+  when neg == 1 {
+    give 0 - v
+  }
+  give v
+}
+
+// Breakpoints live in a preallocated table plus a one-word count, so the
+// command loop only ever writes list elements: no outer binding is reassigned
+// from inside a nested block.
+make dbg_has(bps: list, count: num, v: num) -> num {
+  hold i = 0
+  while i < count {
+    hold b = bps[i]
+    when b == v {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make dbg_bp_add(bps: list, st: list, v: num) -> num {
+  hold n = st[0]
+  when n >= len(bps) {
+    show "sxdbg: breakpoint table is full"
+    give n
+  }
+  bps[n] = v
+  st[0] = n + 1
+  give n + 1
+}
+
+// Drops <v>; gives the new count.
+make dbg_bp_del(bps: list, st: list, v: num) -> num {
+  hold n = st[0]
+  hold i = 0
+  hold j = 0
+  while i < n {
+    hold b = bps[i]
+    when b != v {
+      bps[j] = b
+      j = j + 1
+    }
+    i = i + 1
+  }
+  st[0] = j
+  give j
+}
+
+make dbg_bp_clear(st: list) -> num {
+  st[0] = 0
+  give 0
+}
+
+make dbg_bps(bps: list, n: num) -> num {
+  when n == 0 {
+    show "sxdbg: no breakpoints"
+    give 0
+  }
+  hold out = ""
+  hold i = 0
+  while i < n {
+    when i > 0 {
+      out = concat(out, ", ")
+    }
+    out = concat(out, istr_ir(bps[i]))
+    i = i + 1
+  }
+  show concat("sxdbg: breakpoints: ", out)
+  give 0
+}
+
+// The source offset of the instruction at <ip>: the last mapping at or below it.
+// map_ips is ascending, so this is a binary search and not a scan: a script that
+// steps instruction by instruction would otherwise make every step linear.
+make dbg_src(map_ips: list, map_offs: list, ip: num) -> num {
+  hold lo = 0
+  hold hi = len(map_ips) - 1
+  hold found = 0 - 1
+  while lo <= hi {
+    hold mid = (lo + hi) / 2
+    hold mip = map_ips[mid]
+    when mip <= ip {
+      found = mid
+      lo = mid + 1
+    } otherwise {
+      hi = mid - 1
+    }
+  }
+  when found < 0 {
+    give 0 - 1
+  }
+  hold off = map_offs[found]
+  give off
+}
+
+make dbg_reg_name(i: num) -> str {
+  when i == 0 {
+    give "A"
+  }
+  when i == 1 {
+    give "C"
+  }
+  when i == 2 {
+    give "D"
+  }
+  when i == 3 {
+    give "B"
+  }
+  when i == 4 {
+    give "SP"
+  }
+  when i == 5 {
+    give "BP"
+  }
+  when i == 6 {
+    give "SI"
+  }
+  when i == 7 {
+    give "DI"
+  }
+  when i == 8 {
+    give "R8"
+  }
+  when i == 9 {
+    give "R9"
+  }
+  when i == 10 {
+    give "R10"
+  }
+  when i == 11 {
+    give "R11"
+  }
+  when i == 12 {
+    give "BASE"
+  }
+  when i == 13 {
+    give "R13"
+  }
+  when i == 14 {
+    give "R14"
+  }
+  when i == 15 {
+    give "R15"
+  }
+  when i == 16 {
+    give "F0"
+  }
+  when i == 17 {
+    give "F1"
+  }
+  when i == 18 {
+    give "F2"
+  }
+  when i == 19 {
+    give "F3"
+  }
+  give "?"
+}
+
+// The stop line leads with the source offset, because that is the coordinate
+// prog.ir itself carries (`; source-offset 0001c8 -> I102`), then the VM
+// instruction index, then the call depth.
+make dbg_where(ip: num, src: num, depth: num, nins: num) -> str {
+  hold a = concat("sxdbg: at src 0x", dbg_hex6(src))
+  hold b = concat(" (ip ", concat(istr_ir(ip), concat("/", istr_ir(nins))))
+  hold c = concat(", depth ", concat(istr_ir(depth), ")"))
+  give concat(a, concat(b, c))
+}
+
+make dbg_regs(regs_hi: list, regs_lo: list, flags: list) -> num {
+  hold i = 0
+  while i < 20 {
+    hold hi = regs_hi[i]
+    hold lo = regs_lo[i]
+    hold line = concat(dbg_reg_name(i), concat(" = 0x", dbg_hex64(hi, lo)))
+    when hi == 0 {
+      line = concat(line, concat(" (", concat(istr_ir(lo), ")")))
+    }
+    show concat("sxdbg: ", line)
+    i = i + 1
+  }
+  hold f = ""
+  when flags[0] == 1 {
+    f = concat(f, "C")
+  }
+  when flags[1] == 1 {
+    f = concat(f, "Z")
+  }
+  when flags[2] == 1 {
+    f = concat(f, "S")
+  }
+  when flags[3] == 1 {
+    f = concat(f, "P")
+  }
+  when len(f) == 0 {
+    f = "none"
+  }
+  show concat("sxdbg: flags ", f)
+  give 0
+}
+
+make dbg_reg(name: str, regs_hi: list, regs_lo: list) -> num {
+  hold id = reg_id_ir(name)
+  when id < 0 {
+    show concat("sxdbg: no such register: ", name)
+    give 0
+  }
+  hold hi = regs_hi[id]
+  hold lo = regs_lo[id]
+  show concat("sxdbg: ", concat(name, concat(" = 0x", concat(dbg_hex64(hi, lo), concat(" (", concat(istr_ir(lo), ")"))))))
+  give 0
+}
+
+make dbg_mem(addr: num, len_wanted: num, data: list, stack: list, heap: list) -> num {
+  hold ok = 1
+  when addr < 268435456 || addr > 1073741823 {
+    ok = 0
+  }
+  when ok == 0 {
+    show concat("sxdbg: not a VM address: 0x", dbg_hex(addr))
+    give 0
+  }
+  hold n = len_wanted
+  when n <= 0 {
+    n = 16
+  }
+  when n > 256 {
+    n = 256
+  }
+  hold i = 0
+  while i < n {
+    hold a = addr + i
+    hold byte_v = vm_read_byte(a, data, stack, heap)
+    hold hexb = dbg_hex(byte_v)
+    when len(hexb) < 2 {
+      hexb = concat("0", hexb)
+    }
+    hold lead = "        "
+    when i % 16 == 0 {
+      lead = concat("sxdbg: 0x", concat(dbg_hex(a), ": "))
+    }
+    show concat(lead, hexb)
+    i = i + 1
+  }
+  give 0
+}
+
+make dbg_bt(ret_ips: list, map_ips: list, map_offs: list) -> num {
+  hold n = len(ret_ips)
+  when n == 0 {
+    show "sxdbg: bt: bottom of the call stack"
+  }
+  hold i = n - 1
+  while i >= 0 {
+    hold rip = ret_ips[i]
+    hold srco = dbg_src(map_ips, map_offs, rip)
+    show concat("sxdbg: #", concat(istr_ir(n - 1 - i), concat(" returns to src 0x", concat(dbg_hex6(srco), concat(" (ip ", concat(istr_ir(rip), ")"))))))
+    i = i - 1
+  }
+  give 0
+}
+
+make dbg_help() -> num {
+  show "sxdbg: break <ip> | break src 0x<off> | delete <ip> | clear | info"
+  show "sxdbg: step [k] | next | continue | regs | reg <name> | mem <addr> [n]"
+  show "sxdbg: where | bt | help | quit"
+  give 0
+}
+
+make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_script: str) -> num {
   hold ins = []
   hold map_offs = []
   hold map_ips = []
@@ -1354,6 +1787,29 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> nu
   hold gc_st = [0, 0, sp_top]
   hold ret_ips = []
 
+  // Debugger state. Off unless a script path was given; "-" reads commands from
+  // stdin. The script itself is read once here, not on every stop.
+  hold dq_dbg_on = 0
+  hold dq_dbg_text = ""
+  when len(dbg_script) > 0 {
+    dq_dbg_on = 1
+    when string_eq(dbg_script, "-") == 0 {
+      hold dscript_text = read_file(dbg_script)
+      when len(dscript_text) == 0 {
+        hold fdbg = fail_ir(1, concat("cannot read debugger script: ", dbg_script))
+      }
+      dq_dbg_text = dscript_text
+    }
+  }
+  hold dq_bps = []
+  hold dq_bslot = 0
+  while dq_bslot < 64 {
+    dq_bps = push(dq_bps, 0)
+    dq_bslot = dq_bslot + 1
+  }
+  hold dq_dbg_bpn = [0]
+  hold dq_dbg_st = [0, 0, 0, 0, 0, 0, 0, 0]
+
   hold cf = 0
   hold zf = 0
   hold sf = 0
@@ -1370,6 +1826,172 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> nu
     hold ihi = ins[b + 4]
     hold ilo = ins[b + 5]
     hold next_ip = ip + 1
+
+    // ---- debugger stop point ------------------------------------------------
+    // The test runs before the instruction executes, so a breakpoint means
+    // "stop with this instruction about to run". Everything this block needs
+    // that must survive a stop lives in dq_dbg_st, so the loop itself stays one
+    // loop: a debugging session and a plain run cannot drift apart.
+    when dq_dbg_on == 1 {
+      dq_dbg_st[6] = dq_dbg_st[6] + 1
+      hold dq_dsteps = dq_dbg_st[1]
+      hold dq_dnext = dq_dbg_st[5]
+      hold dq_dnext_at = dq_dbg_st[4]
+      hold dq_dstop = 0
+      // A session always stops at the first instruction, which is where a
+      // script sets its breakpoints before anything has run.
+      when ip == 0 {
+        dq_dstop = 1
+      }
+      when dq_dsteps > 0 {
+        dq_dstop = 1
+      }
+      when dq_dnext == 1 && len(ret_ips) <= dq_dnext_at {
+        dq_dstop = 1
+      }
+      when dbg_has(dq_bps, dq_dbg_bpn[0], ip) == 1 {
+        dq_dstop = 1
+      }
+      when dq_dstop == 1 {
+        dq_dbg_st[5] = 0
+        when dq_dsteps > 0 {
+          dq_dbg_st[1] = dq_dsteps - 1
+        }
+        dq_dbg_st[3] = dq_dbg_st[3] + 1
+        hold dq_nsrc = dbg_src(map_ips, map_offs, ip)
+        show dbg_where(ip, dq_nsrc, len(ret_ips), nins)
+        hold dq_dgoing = 1
+        while dq_dgoing == 1 {
+          hold dq_dline = dbg_line(dq_dbg_text, dq_dbg_st)
+          when len(dq_dline) == 0 {
+            dq_dbg_st[1] = 0
+            dq_dgoing = 0
+          }
+          when len(dq_dline) > 0 {
+            hold dq_dw1 = dbg_word(dq_dline)
+            hold dq_dwn = dbg_rest(dq_dline)
+            dq_dbg_st[7] = 0
+            when string_eq(dq_dw1, "step") == 1 || string_eq(dq_dw1, "s") == 1 {
+              hold dq_dk = 1
+              when len(dq_dwn) > 0 {
+                hold dq_dv = dbg_num(dq_dwn)
+                when dq_dv > 0 {
+                  dq_dk = dq_dv
+                }
+              }
+              dq_dbg_st[1] = dq_dk
+              dq_dbg_st[7] = 1
+              dq_dgoing = 0
+            }
+            when string_eq(dq_dw1, "next") == 1 || string_eq(dq_dw1, "n") == 1 {
+              dq_dbg_st[1] = 0
+              dq_dbg_st[4] = len(ret_ips)
+              dq_dbg_st[5] = 1
+              dq_dbg_st[7] = 1
+              dq_dgoing = 0
+            }
+            when string_eq(dq_dw1, "continue") == 1 || string_eq(dq_dw1, "cont") == 1 || string_eq(dq_dw1, "run") == 1 {
+              dq_dbg_st[1] = 0
+              dq_dbg_st[7] = 1
+              dq_dgoing = 0
+            }
+            when string_eq(dq_dw1, "quit") == 1 || string_eq(dq_dw1, "q") == 1 {
+              dq_dbg_st[2] = 1
+              dq_dbg_st[7] = 1
+              dq_dgoing = 0
+            }
+            when string_eq(dq_dw1, "break") == 1 || string_eq(dq_dw1, "b") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_bkind = dbg_word(dq_dwn)
+              when string_eq(dq_bkind, "src") == 1 {
+                hold dq_boff = dbg_num(dbg_rest(dq_dwn))
+                when dq_boff < 0 {
+                  show "sxdbg: break expects an ip or: break src 0x<offset>"
+                } otherwise {
+                  hold dq_bip = lookup_off_ip(map_offs, map_ips, dq_boff)
+                  when dq_bip < 0 {
+                    show concat("sxdbg: no instruction carries source offset 0x", dbg_hex6(dq_boff))
+                  } otherwise {
+                    hold dq_bn0 = dbg_bp_add(dq_bps, dq_dbg_bpn, dq_bip)
+                    show concat("sxdbg: break at ip ", concat(istr_ir(dq_bip), concat(" (src 0x", concat(dbg_hex6(dq_boff), ")"))))
+                  }
+                }
+              } otherwise {
+                hold dq_bn = dbg_num(dq_bkind)
+                when dq_bn < 0 || dq_bn >= nins {
+                  show concat("sxdbg: no instruction ", dq_bkind)
+                } otherwise {
+                  hold dq_bn1 = dbg_bp_add(dq_bps, dq_dbg_bpn, dq_bn)
+                  show concat("sxdbg: break at ip ", istr_ir(dq_bn))
+                }
+              }
+            }
+            when string_eq(dq_dw1, "delete") == 1 || string_eq(dq_dw1, "d") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dn = dbg_num(dq_dwn)
+              when dq_dn < 0 {
+                show "sxdbg: delete expects an ip"
+              } otherwise {
+                hold dq_dn1 = dbg_bp_del(dq_bps, dq_dbg_bpn, dq_dn)
+                show concat("sxdbg: deleted ip ", concat(istr_ir(dq_dn), concat("; ", concat(istr_ir(dq_dn1), " breakpoints"))))
+              }
+            }
+            when string_eq(dq_dw1, "clear") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dc = dbg_bp_clear(dq_dbg_bpn)
+              show "sxdbg: breakpoints cleared"
+            }
+            when string_eq(dq_dw1, "info") == 1 || string_eq(dq_dw1, "i") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dinfo = dbg_bps(dq_bps, dq_dbg_bpn[0])
+            }
+            when string_eq(dq_dw1, "where") == 1 || string_eq(dq_dw1, "w") == 1 {
+              dq_dbg_st[7] = 1
+              show dbg_where(ip, dq_nsrc, len(ret_ips), nins)
+            }
+            when string_eq(dq_dw1, "src") == 1 {
+              dq_dbg_st[7] = 1
+              show concat("sxdbg: src 0x", dbg_hex6(dq_nsrc))
+            }
+            when string_eq(dq_dw1, "bt") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dbt = dbg_bt(ret_ips, map_ips, map_offs)
+            }
+            when string_eq(dq_dw1, "regs") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dfl = [cf, zf, sf, pf]
+              hold dq_drg = dbg_regs(regs_hi, regs_lo, dq_dfl)
+            }
+            when string_eq(dq_dw1, "reg") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_drr = dbg_reg(dq_dwn, regs_hi, regs_lo)
+            }
+            when string_eq(dq_dw1, "mem") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_mrest = dbg_rest(dq_dwn)
+              hold dq_ma = dbg_num(dbg_word(dq_dwn))
+              hold dq_mn2 = dbg_num(dq_mrest)
+              hold dq_dmem = dbg_mem(dq_ma, dq_mn2, data, stack, heap)
+            }
+            when string_eq(dq_dw1, "help") == 1 || string_eq(dq_dw1, "h") == 1 {
+              dq_dbg_st[7] = 1
+              hold dq_dh = dbg_help()
+            }
+            // A comment is a no-op on stdin too, so both input paths read the
+            // same session files.
+            when sx_index(dq_dw1, 0) == 35 {
+              dq_dbg_st[7] = 1
+            }
+            when dq_dbg_st[7] == 0 {
+              show concat("sxdbg: unknown command: ", concat(dq_dw1, " (help lists the commands)"))
+            }
+          }
+        }
+      }
+    }
+    when dq_dbg_on == 1 && dq_dbg_st[2] == 1 {
+      running = 0
+    }
 
     when op == 0 {
       running = 0
@@ -1900,6 +2522,28 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list) -> nu
 
     ip = next_ip
   }
+  when dq_dbg_on == 1 {
+    hold dq_dins = dq_dbg_st[6]
+    hold dq_dstops = dq_dbg_st[3]
+    hold dq_dquit = dq_dbg_st[2]
+    hold dq_dreason = "exit"
+    when dq_dquit == 1 {
+      dq_dreason = "quit"
+    }
+    when dq_dquit == 0 && dq_dstops > 0 {
+      dq_dreason = "end of program"
+    }
+    hold in_unit = " instructions and "
+    when dq_dins == 1 {
+      in_unit = " instruction and "
+    }
+    hold st_unit = " stops"
+    when dq_dstops == 1 {
+      st_unit = " stop"
+    }
+    hold dq_dsum = concat("sxdbg: ", concat(dq_dreason, concat(" after ", concat(istr_ir(dq_dins), concat(in_unit, concat(istr_ir(dq_dstops), st_unit))))))
+    show dq_dsum
+  }
   give 0
 }
 
@@ -1919,7 +2563,50 @@ make run_ir_bundle(ir_path: str, data_path: str, patch_path: str) -> num {
     hold f3 = fail_ir(1, concat("cannot read patch table: ", patch_path))
   }
   hold pargs = []
-  give execute_ir(ir_text, data, patch_bs, pargs)
+  give execute_ir(ir_text, data, patch_bs, pargs, "")
+}
+
+// The debugger front end: same bundle, same loader, one debugger script
+// ("" runs with the debugger off, "-" reads commands from stdin).
+make run_ir_bundle_dbg(ir_path: str, data_path: str, patch_path: str, dbg_script: str) -> num {
+  hold ir_text = read_file(ir_path)
+  when len(ir_text) == 0 {
+    hold f1 = fail_ir(1, concat("cannot read portable IR file: ", ir_path))
+  }
+  hold data = []
+  hold gd = read_bytes(data_path, data)
+  when gd < 0 {
+    hold f2 = fail_ir(1, concat("cannot read data segment: ", data_path))
+  }
+  hold patch_bs = []
+  hold gp = read_bytes(patch_path, patch_bs)
+  when gp < 0 {
+    hold f3 = fail_ir(1, concat("cannot read patch table: ", patch_path))
+  }
+  hold pargs = []
+  give execute_ir(ir_text, data, patch_bs, pargs, dbg_script)
+}
+
+// Emit the portable IR bundle for <src> into <work>: prog.ir, data.bin and
+// patch.bin. The ELF binary native_aot writes is deleted before anything runs,
+// so a source-level debugging session cannot execute a machine binary either.
+make emit_bundle(src: str, work: str) -> num {
+  hold mk = run_command(concat("mkdir -p ", work))
+  hold log_p = concat(work, "/emit.log")
+  hold elf_p = concat(work, "/unused.elf")
+  hold ir_p = concat(work, "/prog.ir")
+  hold cmd1 = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", concat(work, concat(" ./selfhost/native_aot ", concat(src, concat(" ", elf_p)))))))
+  hold rc1 = run_command(cmd1)
+  when rc1 != 0 {
+    hold f1 = fail_ir(1, concat("native_aot failed on: ", src))
+  }
+  hold rm_elf = run_command(concat("rm -f ", elf_p))
+  hold cmd2 = concat("./tools/emit_to_ir --strict --source-offsets ", concat(log_p, concat(" > ", ir_p)))
+  hold rc2 = run_command(cmd2)
+  when rc2 != 0 {
+    hold f2 = fail_ir(1, "emit_to_ir failed")
+  }
+  give 0
 }
 
 make compile_and_run_ir(src: str, work: str) -> num {
@@ -2002,7 +2689,7 @@ make check_4way_parity(src: str, work: str) -> num {
 
 make main_ir() -> num {
   when arg_count() < 2 {
-    hold u = fail_ir(2, "usage: sxirexec <run|compile-and-run|parity> ...")
+    hold u = fail_ir(2, "usage: sxirexec <run|compile-and-run|parity|debug|debug-bundle> ...")
   }
   hold cmd = arg(1)
   when string_eq(cmd, "run") == 1 {
@@ -2023,8 +2710,29 @@ make main_ir() -> num {
     }
     give check_4way_parity(arg(2), arg(3))
   }
-  hold u4 = fail_ir(2, concat("unknown command: ", cmd))
+  when string_eq(cmd, "debug") == 1 {
+    when arg_count() < 5 {
+      hold u4 = fail_ir(2, "usage: sxirexec debug <in.sa> <work_dir> <script|->")
+    }
+    give debug_source(arg(2), arg(3), arg(4))
+  }
+  when string_eq(cmd, "debug-bundle") == 1 {
+    when arg_count() < 6 {
+      hold u5 = fail_ir(2, "usage: sxirexec debug-bundle <prog.ir> <data.bin> <patch.bin> <script|->")
+    }
+    give run_ir_bundle_dbg(arg(2), arg(3), arg(4), arg(5))
+  }
+  hold u6 = fail_ir(2, concat("unknown command: ", cmd))
   give 0
+}
+
+// Compile a source to its portable IR bundle, then debug that bundle.
+make debug_source(src: str, work: str, script: str) -> num {
+  hold e = emit_bundle(src, work)
+  hold ir_p = concat(work, "/prog.ir")
+  hold data_p = concat(work, "/data.bin")
+  hold patch_p = concat(work, "/patch.bin")
+  give run_ir_bundle_dbg(ir_p, data_p, patch_p, script)
 }
 
 hold z_ir = main_ir()

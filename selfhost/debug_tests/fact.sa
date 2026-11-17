@@ -1,0 +1,29 @@
+// The program the scripted debugging session in this directory debugs.
+// Native-AOT subset on purpose: a program has to emit portable IR before the
+// debugger can run it, and this is the same source the parity gates already
+// run. It prints 9 = 1! + 2! + 3!.
+make fact(n: num) -> num {
+  when n <= 1 {
+    give 1
+  }
+  show n
+  give n * fact(n - 1)
+}
+
+make total(k: num) -> num {
+  hold i = 1
+  hold sum = 0
+  while i <= k {
+    sum = sum + fact(i)
+    i = i + 1
+  }
+  give sum
+}
+
+make main() -> num {
+  hold t = total(3)
+  show t
+  give 0
+}
+
+hold dm = main()

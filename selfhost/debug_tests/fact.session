@@ -1,0 +1,21 @@
+# A scripted debugging session for fact.sa.
+#
+# The session always stops at the entry instruction first: that is where a
+# script sets its breakpoints, before the program has run. After that, one
+# command line is consumed per stop, so "step 3" is followed by whatever the
+# script wants read at the instruction it stopped on.
+#
+# 0x0001c8 is the source offset prog.ir prints for the recursive call inside
+# fact (`; source-offset 0001c8 -> I102`).
+break src 0x0001c8
+run
+where
+bt
+info
+step 3
+where
+reg SP
+delete 89
+info
+break 89
+continue

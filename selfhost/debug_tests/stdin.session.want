@@ -1,0 +1,5 @@
+sxdbg: at src 0x00004a (ip 0/134, depth 0)
+sxdbg: break at ip 89
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+sxdbg: quit after 46 instructions and 2 stops

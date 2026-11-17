@@ -1,0 +1,20 @@
+sxdbg: at src 0x00004a (ip 0/134, depth 0)
+sxdbg: break at ip 89 (src 0x0001c8)
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+sxdbg: #0 returns to src 0x000255 (ip 123)
+sxdbg: #1 returns to src 0x000063 (ip 5)
+sxdbg: breakpoints: 89
+sxdbg: at src 0x00007a (ip 7/134, depth 3)
+sxdbg: at src 0x00007a (ip 7/134, depth 3)
+sxdbg: SP = 0x2000ff70 (536936304)
+sxdbg: deleted ip 89; 0 breakpoints
+sxdbg: no breakpoints
+sxdbg: break at ip 89
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+2
+sxdbg: at src 0x0001c8 (ip 89/134, depth 2)
+3
+2
+9
+sxdbg: end of program after 365 instructions and 5 stops
