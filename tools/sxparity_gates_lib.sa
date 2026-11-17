@@ -552,6 +552,38 @@ make ep_ir() -> num {
     hold parity = gl_assert_files_eq(concat(dir, "/ref.out"), concat(dir, "/vm.out"), "native == IR VM")
     i = i + 1
   }
+
+  // ---- the debugger -------------------------------------------------------
+  // One interpreter, so a debugging session and a plain run cannot drift
+  // apart: the debugged program's output is compared with an undebugged run
+  // (which the parity cases above already compare with a native build), and
+  // two sessions are pinned byte for byte: a script file and the same
+  // debugger driven on stdin.
+  hold dbg_w1 = bt_require_file("selfhost/debug_tests/fact.session.want")
+  hold dbg_w2 = bt_require_file("selfhost/debug_tests/stdin.session.want")
+  hold dbg_src = "selfhost/debug_tests/fact.sa"
+  hold dbg_script = "selfhost/debug_tests/fact.session"
+  hold dbg_stdin = "selfhost/debug_tests/stdin.session"
+  hold dbg_work = concat(dir, "/debug")
+  hold dbg_cmd1 = concat("./tools/sxirexec debug ", concat(dbg_src, concat(" ", concat(sh_quote(dbg_work), concat(" ", dbg_script)))))
+  hold dbg_run1 = pg_capture(dbg_cmd1, concat(dir, "/debug_script.out"))
+  hold dbg_a1 = gl_assert_files_eq(concat(dir, "/debug_script.out"), "selfhost/debug_tests/fact.session.want", "scripted debugger session")
+  hold dbg_cmd2 = concat("cat ", concat(dbg_stdin, concat(" | ./tools/sxirexec debug ", concat(dbg_src, concat(" ", concat(sh_quote(concat(dir, "/debug_stdin")), " -"))))))
+  hold dbg_run2 = pg_capture(dbg_cmd2, concat(dir, "/debug_stdin.out"))
+  hold dbg_a2 = gl_assert_files_eq(concat(dir, "/debug_stdin.out"), "selfhost/debug_tests/stdin.session.want", "stdin debugger session")
+  // A script path that does not exist is an error, not a session that silently
+  // runs the program instead of debugging it.
+  hold dbg_missing = concat("./tools/sxirexec debug ", concat(dbg_src, concat(" ", concat(sh_quote(concat(dir, "/debug_missing")), " selfhost/debug_tests/no_such.session"))))
+  hold dbg_neg = pg_expect_failure(dbg_missing, "missing debugger script")
+  // What the debugger ran is what the native build prints.
+  hold dbg_plain = concat(dir, "/debug_plain")
+  hold dbg_cmd3 = concat("./tools/sxirexec compile-and-run ", concat(dbg_src, concat(" ", sh_quote(dbg_plain))))
+  hold dbg_run3 = pg_capture(dbg_cmd3, concat(dir, "/debug_plain.out"))
+  hold dbg_nat = concat(dir, "/debug_nat")
+  hold dbg_nat_c = ep_compile(2, dbg_src, dbg_nat)
+  hold dbg_run4 = pg_capture(sh_quote(dbg_nat), concat(dir, "/debug_nat.out"))
+  hold dbg_a3 = gl_assert_files_eq(concat(dir, "/debug_plain.out"), concat(dir, "/debug_nat.out"), "debuggable program == native build")
+  hold dbg_a4 = gl_assert_eq_num(ep_has_line(concat(dir, "/debug_plain.out"), "9"), 0, "debuggable program printed its answer")
   give 0
 }
 

@@ -1,5 +1,36 @@
 # Status
 
+**2026-11-17 update: a debugger for the portable IR VM — same interpreter, stop test on**
+
+`tools/sxirexec debug` / `debug-bundle` make the portable IR virtual machine
+steppable: breakpoints by the source offset `prog.ir` itself prints or by
+instruction index, `step [k]`, `next` (step over a call), `continue`,
+`where`/`src`, `bt`, `regs`/`reg <name>`, `mem <addr> [len]`,
+`info`/`delete`/`clear`, `help` and `quit`. A session is a command file, or `-`
+to read commands from stdin; comments and blank lines are skipped on both paths,
+one command is consumed per stop, and a session always stops at the first
+instruction because that is where a script sets its breakpoints.
+
+The point is what it is *not*: not a second interpreter. `execute_ir` takes the
+script path, and with it empty the interpreter prints nothing and takes no
+debugger branch, so the run a gate compares four ways and the run a user steps
+through are the same loop. Every stop line leads with the source offset and
+then the VM instruction index and call depth, because the listing's `I<n>` label
+and the VM's index are different numbering schemes and pretending otherwise
+would be the first lie in a debugging session.
+
+It is honest about its limits too: no source line table (the emitter records byte
+offsets, not lines), no variable names or types (the portable IR carries no debug
+information, so stack slots are what the machine offers), and no conditional
+breakpoints, watchpoints, reverse execution or machine-binary debugging. Each of
+those is written down in [DEBUGGER.md](DEBUGGER.md) rather than approximated.
+
+Evidence: `./sx target test-ir-exec` pins two sessions byte for byte
+(`selfhost/debug_tests/fact.session` and the stdin `stdin.session`), compares the
+debugged program's own output with a native build, and requires a missing session
+file to fail the run; the pre-existing four 4-way parity cases and five
+`native == IR VM` cases still pass unchanged.
+
 **2026-11-17 update: byte regular expressions — a bounded engine, not a guess**
 
 `stdlib/regex.sa` (`rx_*`) answers "does this text contain that shape, and

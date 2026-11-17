@@ -441,3 +441,10 @@ applying it.
   across SHA-256/HMAC-SHA256 (`stdlib_crypto_test.sa`), `stdlib_json_write_test.sa`,
   `stdlib_growth_test.sa`, and `native_ir_log_test.sa`, plus Stage-2 struct-typed functions and
   `${id}` string interpolation.
+* **Debugger over the same VM (`tools/sxirexec.sa debug`, 2026-11-17):** the debugger
+  is the interpreter with a stop test, not a second interpreter. `execute_ir` takes a
+  command script and services breakpoints, stepping, `next` (step over a call), register
+  and memory reads, the call stack and a per-instruction count inside the one execution
+  loop; with no script nothing is printed and no branch is taken. `./sx target test-ir-exec`
+  pins two sessions byte for byte (a script file and stdin) and checks the debugged
+  program's output against a native build. See [DEBUGGER.md](DEBUGGER.md).

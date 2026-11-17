@@ -1,0 +1,7 @@
+# The same debugger driven on stdin instead of a script file ("-"): an empty
+# line, or end of input, resumes execution, so this session quits on purpose
+# with the program unfinished and prints the summary instead of the answer.
+break 89
+run
+where
+quit
