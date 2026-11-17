@@ -1,0 +1,706 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: uword (UAX #29 word boundaries, prefix `uwb_`).
+//
+// Three layers, and the oracle is never the module under test:
+//
+//   Layer 1 reads the official Unicode 17.0.0 WordBreakTest.txt
+//   (selfhost/stdlib_uword_cases.txt) at run time and takes the divide marks in
+//   it as the expected boundary set for all 1944 cases. Each case is judged
+//   twice: over its code points (uwb_breaks_cp) and, unless it contains U+0000 --
+//   which a Sayanox string cannot carry -- over a string built from those code
+//   points, where the expected byte offsets are derived by summing UTF-8 lengths
+//   and never by re-running the algorithm.
+//
+//   Layer 2 reads WordBreakProperty.txt and emoji/emoji-data.txt
+//   (selfhost/stdlib_uword_props.txt and selfhost/stdlib_uword_emoji.txt),
+//   merges their adjacent entries the way a range table has to be built, and
+//   compares the result with the module's tables element by element, so a
+//   missing, extra or mis-classed range fails the gate. A stepped sweep then
+//   compares uwb_class and uwb_is_extpict against the same files at 4328 code
+//   points spread over the whole space, which pins the bisection itself.
+//
+//   Layer 3 pins the string API and the failure contract: malformed UTF-8 and
+//   text over uwb_max_cps() code points give [] / -1 / "", and the empty string
+//   is one empty word.
+//
+// The .want bytes below are the whole expected output, so a silent skip, a
+// changed case count or a single misplaced boundary all fail.
+
+use "stdlib/utf8.sa"
+use "stdlib/uwidth.sa"
+use "stdlib/uword.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = u8_div(x - d, 10)
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_num(tag: str, v: num) -> num {
+  show concat(tag, fx_i(v))
+  give 0
+}
+
+make fx_text(tag: str, v: str) -> num {
+  show concat(tag, v)
+  give 0
+}
+
+make fx_hex(b: num) -> num {
+  when b >= 48 and b <= 57 {
+    give b - 48
+  }
+  when b >= 65 and b <= 70 {
+    give b - 55
+  }
+  when b >= 97 and b <= 102 {
+    give b - 87
+  }
+  give 0 - 1
+}
+
+make fx_space(b: num) -> num {
+  when b == 32 or b == 9 {
+    give 1
+  }
+  give 0
+}
+
+make fx_same(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold i = 0
+  while i < len(a) {
+    when a[i] != b[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make fx_list(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    out = concat(out, fx_i(xs[i]))
+    out = concat(out, " ")
+    i = i + 1
+  }
+  give out
+}
+
+make fx_show_case(tag: str, cps: list, want: list, got: list) -> num {
+  show concat(tag, concat(" cps ", fx_list(cps)))
+  show concat("  want ", fx_list(want))
+  show concat("  got  ", fx_list(got))
+  give 0
+}
+
+make fx_utf8_len(cp: num) -> num {
+  when cp < 128 {
+    give 1
+  }
+  when cp < 2048 {
+    give 2
+  }
+  when cp < 65536 {
+    give 3
+  }
+  give 4
+}
+
+// chr() is one byte, so UTF-8 is spelled out here rather than assumed.
+make fx_utf8(cps: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(cps) {
+    hold cp = cps[i]
+    when cp < 128 {
+      out = concat(out, chr(cp))
+    } otherwise {
+      when cp < 2048 {
+        out = concat(out, chr(192 + u8_div(cp, 64)))
+        out = concat(out, chr(128 + cp % 64))
+      } otherwise {
+        when cp < 65536 {
+          out = concat(out, chr(224 + u8_div(cp, 4096)))
+          out = concat(out, chr(128 + (u8_div(cp, 64)) % 64))
+          out = concat(out, chr(128 + cp % 64))
+        } otherwise {
+          out = concat(out, chr(240 + u8_div(cp, 262144)))
+          out = concat(out, chr(128 + (u8_div(cp, 4096)) % 64))
+          out = concat(out, chr(128 + (u8_div(cp, 64)) % 64))
+          out = concat(out, chr(128 + cp % 64))
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make fx_has_zero(cps: list) -> num {
+  hold i = 0
+  while i < len(cps) {
+    when cps[i] == 0 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+// Code-point offsets turned into byte offsets, the expectation the string API
+// has to meet; independent of uwb_offsets.
+make fx_bytes(cps: list, marks: list) -> list {
+  hold offs = []
+  hold at = 0
+  hold i = 0
+  while i < len(cps) {
+    offs = push(offs, at)
+    at = at + fx_utf8_len(cps[i])
+    i = i + 1
+  }
+  offs = push(offs, at)
+  hold out = []
+  i = 0
+  while i < len(marks) {
+    hold m = marks[i]
+    hold v = 0 - 1
+    when m >= 0 and m < len(offs) {
+      v = offs[m]
+    }
+    out = push(out, v)
+    i = i + 1
+  }
+  give out
+}
+
+// Layer 1. Returns [cases, cp fails, string cases, string fails, skipped].
+// The divide sign is U+00F7 (C3 B7) and the times sign U+00D7 (C3 97); word
+// break test lines put one of them before every code point and the end mark.
+make fx_corpus(path: str) -> list {
+  hold text = read_file(path)
+  hold n = len(text)
+  hold i = 0
+  hold cps = []
+  hold want = []
+  hold cases = 0
+  hold fails = 0
+  hold scases = 0
+  hold sfails = 0
+  hold skipped = 0
+  while i <= n {
+    hold c = 10
+    when i < n {
+      c = sx_index(text, i)
+    }
+    when c == 35 {
+      // comment: skip to the newline
+      while i < n and sx_index(text, i) != 10 {
+        i = i + 1
+      }
+      i = i - 1
+    } otherwise {
+      when c == 10 {
+        when len(cps) > 0 {
+          cases = cases + 1
+          hold got = uwb_breaks_cp(cps)
+          when fx_same(got, want) == 0 {
+            fails = fails + 1
+            when fails <= 3 {
+              hold r1 = fx_show_case("mismatch", cps, want, got)
+            }
+          }
+          when fx_has_zero(cps) == 1 {
+            skipped = skipped + 1
+          } otherwise {
+            scases = scases + 1
+            hold s = fx_utf8(cps)
+            hold sgot = uwb_breaks(s)
+            hold swant = fx_bytes(cps, want)
+            when fx_same(sgot, swant) == 0 {
+              sfails = sfails + 1
+              when sfails <= 3 {
+                hold r2 = fx_show_case("string mismatch", cps, swant, sgot)
+              }
+            }
+            when uwb_count(s) != len(swant) - 1 {
+              sfails = sfails + 1
+            }
+          }
+        }
+        cps = []
+        want = []
+      } otherwise {
+        when c == 195 {
+          hold d = 0
+          when i + 1 < n {
+            d = sx_index(text, i + 1)
+          }
+          when d == 183 {
+            want = push(want, len(cps))
+          }
+          i = i + 1
+        } otherwise {
+          when fx_space(c) == 0 {
+            hold v = 0
+            hold any = 0
+            hold k = i
+            while k < n and fx_hex(sx_index(text, k)) >= 0 {
+              v = v * 16 + fx_hex(sx_index(text, k))
+              any = 1
+              k = k + 1
+            }
+            when any == 1 {
+              cps = push(cps, v)
+              i = k - 1
+            }
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  give [cases, fails, scases, sfails, skipped]
+}
+
+// Layer 2 helpers. Word_Break names in the data file to the module's numbers.
+make fx_cls_name(name: str) -> num {
+  when string_eq(name, "Other") == 1 {
+    give 0
+  }
+  when string_eq(name, "CR") == 1 {
+    give 1
+  }
+  when string_eq(name, "LF") == 1 {
+    give 2
+  }
+  when string_eq(name, "Newline") == 1 {
+    give 3
+  }
+  when string_eq(name, "Extend") == 1 {
+    give 4
+  }
+  when string_eq(name, "ZWJ") == 1 {
+    give 5
+  }
+  when string_eq(name, "Regional_Indicator") == 1 {
+    give 6
+  }
+  when string_eq(name, "Format") == 1 {
+    give 7
+  }
+  when string_eq(name, "Katakana") == 1 {
+    give 8
+  }
+  when string_eq(name, "Hebrew_Letter") == 1 {
+    give 9
+  }
+  when string_eq(name, "ALetter") == 1 {
+    give 10
+  }
+  when string_eq(name, "Single_Quote") == 1 {
+    give 11
+  }
+  when string_eq(name, "Double_Quote") == 1 {
+    give 12
+  }
+  when string_eq(name, "MidNumLet") == 1 {
+    give 13
+  }
+  when string_eq(name, "MidLetter") == 1 {
+    give 14
+  }
+  when string_eq(name, "MidNum") == 1 {
+    give 15
+  }
+  when string_eq(name, "Numeric") == 1 {
+    give 16
+  }
+  when string_eq(name, "ExtendNumLet") == 1 {
+    give 17
+  }
+  when string_eq(name, "WSegSpace") == 1 {
+    give 18
+  }
+  give 0 - 1
+}
+
+// One property file as [entries, parse errors, lo, hi, class, ...], unmerged and
+// in file order. With emoji set only Extended_Pictographic entries are kept.
+make fx_ranges(path: str, emoji: num) -> list {
+  hold text = read_file(path)
+  hold n = len(text)
+  hold tbl = [0, 0]
+  hold i = 0
+  while i < n {
+    hold line_end = i
+    while line_end < n and sx_index(text, line_end) != 10 {
+      line_end = line_end + 1
+    }
+    hold stop = line_end
+    hold k = i
+    while k < line_end {
+      when sx_index(text, k) == 35 and stop == line_end {
+        stop = k
+      }
+      k = k + 1
+    }
+    hold semi = stop
+    k = i
+    while k < stop {
+      when sx_index(text, k) == 59 and semi == stop {
+        semi = k
+      }
+      k = k + 1
+    }
+    when semi < stop {
+      hold lo = 0
+      hold hi = 0
+      hold any = 0
+      hold at = i
+      while at < semi and fx_space(sx_index(text, at)) == 1 {
+        at = at + 1
+      }
+      while at < semi and fx_hex(sx_index(text, at)) >= 0 {
+        lo = lo * 16 + fx_hex(sx_index(text, at))
+        any = 1
+        at = at + 1
+      }
+      hi = lo
+      when at + 1 < semi {
+        when sx_index(text, at) == 46 and sx_index(text, at + 1) == 46 {
+          at = at + 2
+          hi = 0
+          while at < semi and fx_hex(sx_index(text, at)) >= 0 {
+            hi = hi * 16 + fx_hex(sx_index(text, at))
+            at = at + 1
+          }
+        }
+      }
+      when any == 1 {
+        hold name = ""
+        hold p = semi + 1
+        while p < stop and fx_space(sx_index(text, p)) == 1 {
+          p = p + 1
+        }
+        while p < stop and fx_space(sx_index(text, p)) == 0 {
+          name = concat(name, chr(sx_index(text, p)))
+          p = p + 1
+        }
+        hold cls = 0 - 2
+        when emoji == 0 {
+          cls = fx_cls_name(name)
+        } otherwise {
+          // emoji-data.txt carries several properties; WB3c wants only this one
+          when string_eq(name, "Extended_Pictographic") == 1 {
+            cls = 1
+          }
+        }
+        when cls == 0 - 1 {
+          tbl[1] = 1
+        } otherwise {
+          when cls >= 0 {
+            tbl = push(tbl, lo)
+            tbl = push(tbl, hi)
+            tbl = push(tbl, cls)
+            tbl[0] = tbl[0] + 1
+          }
+        }
+      }
+    }
+    i = line_end + 1
+  }
+  give tbl
+}
+
+// The property files are grouped by property name, not by code point, so the
+// entries are sorted before they are merged: insertion sort in place.
+make fx_sort(tbl: list) -> list {
+  hold rows = tbl[0]
+  hold i = 1
+  while i < rows {
+    hold lo = tbl[2 + i * 3]
+    hold hi = tbl[3 + i * 3]
+    hold cls = tbl[4 + i * 3]
+    hold j = i
+    hold still = 1
+    while j > 0 and still == 1 {
+      hold plo = tbl[2 + (j - 1) * 3]
+      when plo > lo {
+        tbl[2 + j * 3] = plo
+        tbl[3 + j * 3] = tbl[3 + (j - 1) * 3]
+        tbl[4 + j * 3] = tbl[4 + (j - 1) * 3]
+        j = j - 1
+      } otherwise {
+        still = 0
+      }
+    }
+    tbl[2 + j * 3] = lo
+    tbl[3 + j * 3] = hi
+    tbl[4 + j * 3] = cls
+    i = i + 1
+  }
+  give tbl
+}
+
+// Adjacent entries of one class merged, which is what a bisection table has to
+// look like: [rows, lo, hi, class, ...]. Class 0 -- Other -- is the default a
+// lookup falls through to, so it is not stored.
+make fx_merge(tbl: list) -> list {
+  hold rows = tbl[0]
+  hold out = [0]
+  hold i = 0
+  while i < rows {
+    hold lo = tbl[2 + i * 3]
+    hold hi = tbl[3 + i * 3]
+    hold cls = tbl[4 + i * 3]
+    when cls != 0 {
+      hold done = 0
+      hold k = out[0]
+      when k > 0 {
+        hold back = 1 + (k - 1) * 3
+        when out[back + 2] == cls and out[back + 1] + 1 == lo {
+          out[back + 1] = hi
+          done = 1
+        }
+      }
+      when done == 0 {
+        out = push(out, lo)
+        out = push(out, hi)
+        out = push(out, cls)
+        out[0] = k + 1
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+// Class at a code point per a merged table, 0 outside every range.
+make fx_lookup(tbl: list, cp: num) -> num {
+  hold lo = 0
+  hold hi = tbl[0] - 1
+  while lo <= hi {
+    hold mid = u8_div(lo + hi, 2)
+    hold back = 1 + mid * 3
+    when cp < tbl[back] {
+      hi = mid - 1
+    } otherwise {
+      when cp > tbl[back + 1] {
+        lo = mid + 1
+      } otherwise {
+        give tbl[back + 2]
+      }
+    }
+  }
+  give 0
+}
+
+// A merged [rows, lo, hi, class, ...] table as [rows, lo, hi, ...] pairs, the
+// shape the Extended_Pictographic table uses.
+make fx_pairs(tbl: list) -> list {
+  hold rows = tbl[0]
+  hold out = [0]
+  hold i = 0
+  while i < rows {
+    out = push(out, tbl[1 + i * 3])
+    out = push(out, tbl[2 + i * 3])
+    i = i + 1
+  }
+  out[0] = rows
+  give out
+}
+
+// Element-by-element comparison of a merged table with a module table of the
+// same row width. Returns [mismatches, elements compared].
+make fx_table_cmp(tbl: list, mod: list, width: num) -> list {
+  hold bad = 0
+  hold n = tbl[0] * width
+  when len(mod) != n {
+    bad = bad + 1
+    hold size = concat("table size ", concat(fx_i(len(mod)), concat(" vs ", fx_i(n))))
+    show size
+  }
+  hold i = 0
+  while i < n and i < len(mod) {
+    when tbl[1 + i] != mod[i] {
+      bad = bad + 1
+      when bad <= 3 {
+        hold line = concat("table mismatch at ", fx_i(i))
+        show line
+      }
+    }
+    i = i + 1
+  }
+  give [bad, n]
+}
+
+make fx_sweep_class(tbl: list, step: num) -> list {
+  hold bad = 0
+  hold seen = 0
+  hold cp = 0
+  while cp <= 1114111 {
+    hold ok = 1
+    when cp >= 55296 and cp <= 57343 {
+      ok = 0
+    }
+    when ok == 1 {
+      seen = seen + 1
+      when uwb_class(cp) != fx_lookup(tbl, cp) {
+        bad = bad + 1
+        when bad <= 3 {
+          hold line = concat("class mismatch at ", fx_i(cp))
+          show line
+        }
+      }
+    }
+    cp = cp + step
+  }
+  give [bad, seen]
+}
+
+make fx_sweep_extpict(tbl: list, step: num) -> list {
+  hold bad = 0
+  hold seen = 0
+  hold cp = 0
+  while cp <= 1114111 {
+    hold ok = 1
+    when cp >= 55296 and cp <= 57343 {
+      ok = 0
+    }
+    when ok == 1 {
+      seen = seen + 1
+      hold want = 0
+      when fx_lookup(tbl, cp) == 1 {
+        want = 1
+      }
+      when uwb_is_extpict(cp) != want {
+        bad = bad + 1
+        when bad <= 3 {
+          hold line = concat("extpict mismatch at ", fx_i(cp))
+          show line
+        }
+      }
+    }
+    cp = cp + step
+  }
+  give [bad, seen]
+}
+
+make fx_long(n: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < n {
+    out = push(out, 97)
+    i = i + 1
+  }
+  give out
+}
+
+// Layer 1.
+hold rc = fx_corpus("selfhost/stdlib_uword_cases.txt")
+hold l1 = fx_num("corpus cases ", rc[0])
+hold l2 = fx_num("corpus failures ", rc[1])
+hold l3 = fx_num("string cases ", rc[2])
+hold l4 = fx_num("string failures ", rc[3])
+hold l5 = fx_num("string skipped ", rc[4])
+
+// Layer 2.
+hold wb = fx_ranges("selfhost/stdlib_uword_props.txt", 0)
+hold em = fx_ranges("selfhost/stdlib_uword_emoji.txt", 1)
+hold wbm = fx_merge(fx_sort(wb))
+hold emm = fx_merge(fx_sort(em))
+hold p1 = fx_num("wb entries ", wb[0])
+hold p2 = fx_num("wb parse errors ", wb[1])
+hold p3 = fx_num("extpict entries ", em[0])
+hold p4 = fx_num("extpict parse errors ", em[1])
+hold p5 = fx_num("wb merged rows ", wbm[0])
+hold p6 = fx_num("extpict merged rows ", emm[0])
+hold p7 = fx_num("wb table rows ", u8_div(len(uwb_wb_ranges()), 3))
+hold p8 = fx_num("extpict table rows ", u8_div(len(uwb_extpict_ranges()), 2))
+hold t1 = fx_table_cmp(wbm, uwb_wb_ranges(), 3)
+hold t2 = fx_num("wb table mismatches ", t1[0])
+hold t3 = fx_num("wb table elements ", t1[1])
+hold t4 = fx_table_cmp(fx_pairs(emm), uwb_extpict_ranges(), 2)
+hold t5 = fx_num("extpict table mismatches ", t4[0])
+hold t6 = fx_num("extpict table elements ", t4[1])
+hold s1 = fx_sweep_class(wbm, 257)
+hold s2 = fx_num("class sweep mismatches ", s1[0])
+hold s3 = fx_num("class sweep points ", s1[1])
+hold s4 = fx_sweep_extpict(emm, 257)
+hold s5 = fx_num("extpict sweep mismatches ", s4[0])
+hold s6 = fx_num("extpict sweep points ", s4[1])
+
+// Layer 3. Properties.
+hold c1 = fx_num("class count ", uwb_class_count())
+hold c2 = fx_num("max cps ", uwb_max_cps())
+hold c3 = fx_num("class a ", uwb_class(97))
+hold c4 = fx_num("class space ", uwb_class(32))
+hold c5 = fx_num("class apostrophe ", uwb_class(39))
+hold c6 = fx_num("class dquote ", uwb_class(34))
+hold c7 = fx_num("class hyphen ", uwb_class(45))
+hold c8 = fx_num("class hebrew ", uwb_class(1488))
+hold c9 = fx_num("class kana ", uwb_class(12450))
+hold c10 = fx_num("class digit ", uwb_class(48))
+hold c11 = fx_num("class underscore ", uwb_class(95))
+hold c12 = fx_num("class zwj ", uwb_class(8205))
+hold c13 = fx_num("class cr ", uwb_class(13))
+hold c14 = fx_num("class lf ", uwb_class(10))
+hold c15 = fx_num("class nul ", uwb_class(0))
+hold c16 = fx_num("class surrogate ", uwb_class(55296))
+hold c17 = fx_num("class too big ", uwb_class(1114112))
+hold c18 = fx_num("class negative ", uwb_class(0 - 1))
+hold e1 = fx_num("extpict emoji ", uwb_is_extpict(128512))
+hold e2 = fx_num("extpict heart ", uwb_is_extpict(10084))
+hold e3 = fx_num("extpict letter ", uwb_is_extpict(65))
+hold e4 = fx_num("extpict surrogate ", uwb_is_extpict(55296))
+
+// Layer 3. Failure contract.
+hold f1 = fx_num("empty breaks ", len(uwb_breaks_cp([])))
+hold f2 = fx_num("empty count ", uwb_count_cp([]))
+hold f3 = fx_num("bad breaks ", len(uwb_breaks_cp([55296])))
+hold f4 = fx_num("bad count ", uwb_count_cp([55296]))
+hold f5 = fx_num("overlong breaks ", len(uwb_breaks_cp(fx_long(4097))))
+hold f6 = fx_num("overlong count ", uwb_count_cp(fx_long(4097)))
+hold f7 = fx_num("bad text ", uwb_count(chr(255)))
+hold f8 = fx_num("empty text ", uwb_count(""))
+hold f9 = fx_num("bad text breaks ", len(uwb_breaks(chr(255))))
+
+// Layer 3. String API.
+hold g1 = fx_text("breaks dont ", fx_list(uwb_breaks("don't stop")))
+hold g2 = fx_text("take 2 ", uwb_take("don't stop", 2))
+hold g3 = fx_text("drop 2 ", uwb_drop("don't stop", 2))
+hold g4 = fx_text("take 0 ", uwb_take("don't stop", 0))
+hold g5 = fx_text("drop 0 ", uwb_drop("don't stop", 0))
+hold g6 = fx_text("take all ", uwb_take("don't stop", 9))
+hold g7 = fx_text("drop all ", uwb_drop("don't stop", 9))
+hold g8 = fx_num("word0 start ", uwb_word_start("don't stop", 0))
+hold g9 = fx_num("word0 end ", uwb_word_end("don't stop", 0))
+hold g10 = fx_num("word2 start ", uwb_word_start("don't stop", 2))
+hold g11 = fx_num("word2 end ", uwb_word_end("don't stop", 2))
+hold g12 = fx_num("word9 start ", uwb_word_start("don't stop", 9))
+hold g13 = fx_text("slice ", uwb_slice("don't stop", 6, 10))
+hold g14 = fx_text("slice bad ", uwb_slice("don't stop", 6, 99))
+
+show "uword-ok"

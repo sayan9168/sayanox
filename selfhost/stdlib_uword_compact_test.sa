@@ -1,0 +1,228 @@
+// Frozen independent expectations; do not edit by hand.
+// Unicode module group: uword, bounded-backend companion. The same UAX #29 rules
+// as selfhost/stdlib_uword_test.sa, cut down to what native_aot's 64 globals and
+// 64 locals allow, so no backend is blind to this module. Every case below is a
+// verbatim line of the official Unicode 17.0.0 WordBreakTest.txt -- the divide
+// and times marks are the expectation, and each rule of the algorithm has at
+// least one case: WB3, WB3a/b (3.1, 3.2), WB3c (3.3), WB3d (3.4), WB4, WB5-WB10,
+// WB7a/b/c (7.1, 7.2, 7.3), WB11/WB12, WB13 (13.0), WB13a/b (13.1, 13.2),
+// WB15/WB16 and WB999.
+//
+// Each case is judged twice: over its code points (uwb_breaks_cp) and over a
+// string built from them (uwb_breaks), where the expected byte offsets are the
+// official code-point offsets mapped through UTF-8 lengths. The API pins and the
+// failure contract come last.
+
+use "stdlib/utf8.sa"
+use "stdlib/uwidth.sa"
+use "stdlib/uword.sa"
+
+make fx_i(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    hold digit = chr(48 + d)
+    out = concat(digit, out)
+    x = u8_div(x - d, 10)
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make fx_num(tag: str, v: num) -> num {
+  show concat(tag, fx_i(v))
+  give 0
+}
+
+make fx_text(tag: str, v: str) -> num {
+  show concat(tag, v)
+  give 0
+}
+
+make fx_list(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    out = concat(out, fx_i(xs[i]))
+    out = concat(out, " ")
+    i = i + 1
+  }
+  give out
+}
+
+make fx_same(a: list, b: list) -> num {
+  when len(a) != len(b) {
+    give 0
+  }
+  hold i = 0
+  while i < len(a) {
+    when a[i] != b[i] {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// chr() is one byte, so UTF-8 is spelled out here rather than assumed.
+make fx_utf8(cps: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(cps) {
+    hold cp = cps[i]
+    when cp < 128 {
+      out = concat(out, chr(cp))
+    } otherwise {
+      when cp < 2048 {
+        out = concat(out, chr(192 + u8_div(cp, 64)))
+        out = concat(out, chr(128 + cp % 64))
+      } otherwise {
+        when cp < 65536 {
+          out = concat(out, chr(224 + u8_div(cp, 4096)))
+          out = concat(out, chr(128 + u8_div(cp, 64) % 64))
+          out = concat(out, chr(128 + cp % 64))
+        } otherwise {
+          out = concat(out, chr(240 + u8_div(cp, 262144)))
+          out = concat(out, chr(128 + u8_div(cp, 4096) % 64))
+          out = concat(out, chr(128 + u8_div(cp, 64) % 64))
+          out = concat(out, chr(128 + cp % 64))
+        }
+      }
+    }
+    i = i + 1
+  }
+  give out
+}
+
+make fx_utf8_len(cp: num) -> num {
+  when cp < 128 {
+    give 1
+  }
+  when cp < 2048 {
+    give 2
+  }
+  when cp < 65536 {
+    give 3
+  }
+  give 4
+}
+
+// Official code-point offsets as byte offsets; independent of uwb_offsets.
+make fx_bytes(cps: list, marks: list) -> list {
+  hold offs = []
+  hold at = 0
+  hold i = 0
+  while i < len(cps) {
+    offs = push(offs, at)
+    at = at + fx_utf8_len(cps[i])
+    i = i + 1
+  }
+  offs = push(offs, at)
+  hold out = []
+  i = 0
+  while i < len(marks) {
+    out = push(out, offs[marks[i]])
+    i = i + 1
+  }
+  give out
+}
+
+// Text one code point over uwb_max_cps(), for the over-long refusal.
+make fx_long() -> list {
+  hold out = []
+  hold i = 0
+  while i < 4097 {
+    out = push(out, 97)
+    i = i + 1
+  }
+  give out
+}
+
+// [cases, code-point failures, string failures]
+make fx_run(seq: list) -> list {
+  hold i = 0
+  hold cases = 0
+  hold fails = 0
+  hold sfails = 0
+  while i < len(seq) {
+    i = i + 1
+    hold cps = []
+    while seq[i] != 0 - 2 {
+      cps = push(cps, seq[i])
+      i = i + 1
+    }
+    i = i + 1
+    hold want = []
+    while seq[i] != 0 - 3 {
+      want = push(want, seq[i])
+      i = i + 1
+    }
+    i = i + 1
+    cases = cases + 1
+    hold got = uwb_breaks_cp(cps)
+    when fx_same(got, want) == 0 {
+      fails = fails + 1
+      show concat(concat("mismatch cps ", fx_list(cps)), concat(" got ", fx_list(got)))
+    }
+    hold s = fx_utf8(cps)
+    hold swant = fx_bytes(cps, want)
+    when fx_same(uwb_breaks(s), swant) == 0 {
+      sfails = sfails + 1
+      show concat(concat("string mismatch ", fx_list(cps)), concat(" got ", fx_list(uwb_breaks(s))))
+    }
+  }
+  give [cases, fails, sfails]
+}
+
+// The official cases, each as -1, code points, -2, expected offsets, -3.
+// 3.0 CR x LF; 3.1/3.2 nothing joins to a newline; 3.3 ZWJ x ExtPict;
+// 3.4 WSegSpace x WSegSpace; 4.0 Extend attaches; 5.0 AHLetter x AHLetter;
+// 6.0/7.0 AHLetter MidLetter AHLetter; 7.1/7.2/7.3 Hebrew quotes;
+// 8.0/9.0/10.0 Numeric; 11.0/12.0 Numeric MidNum Numeric; 13.0 Katakana;
+// 13.1/13.2 ExtendNumLet either way; 15.0/16.0 regional indicators; 999.0 other.
+hold seq = [-1, 13, 10, -2, 0, 2, -3, -1, 13, 13, -2, 0, 1, 2, -3, -1, 13, 776, 13, -2, 0, 1, 2, 3, -3, -1, 8205, 9410, -2, 0, 2, -3, -1, 32, 32, -2, 0, 2, -3, -1, 13, 776, 768, -2, 0, 1, 3, -3, -1, 9410, 9410, -2, 0, 2, -3, -1, 97, 58, 9410, -2, 0, 3, -3, -1, 1488, 39, -2, 0, 2, -3, -1, 1488, 34, 1488, -2, 0, 3, -3, -1, 48, 48, -2, 0, 2, -3, -1, 9410, 48, -2, 0, 2, -3, -1, 48, 9410, -2, 0, 2, -3, -1, 49, 39, 48, -2, 0, 3, -3, -1, 12337, 12337, -2, 0, 2, -3, -1, 12337, 95, -2, 0, 2, -3, -1, 95, 12337, -2, 0, 2, -3, -1, 127462, 127462, -2, 0, 2, -3, -1, 97, 127462, 127463, 127464, 98, -2, 0, 1, 3, 4, 5, -3, -1, 13, 776, 12337, -2, 0, 1, 2, 3, -3]
+
+hold rc = fx_run(seq)
+hold r1 = fx_num("cases ", rc[0])
+hold r2 = fx_num("failures ", rc[1])
+hold r3 = fx_num("string failures ", rc[2])
+
+// Properties, from WordBreakProperty.txt and emoji-data.txt.
+hold c1 = fx_num("class count ", uwb_class_count())
+hold c2 = fx_num("class a ", uwb_class(97))
+hold c3 = fx_num("class space ", uwb_class(32))
+hold c4 = fx_num("class colon ", uwb_class(58))
+hold c5 = fx_num("class hebrew ", uwb_class(1488))
+hold c6 = fx_num("class kana ", uwb_class(12337))
+hold c7 = fx_num("class underscore ", uwb_class(95))
+hold c8 = fx_num("class ri ", uwb_class(127462))
+hold c9 = fx_num("class zwj ", uwb_class(8205))
+hold c10 = fx_num("class surrogate ", uwb_class(55296))
+hold c11 = fx_num("extpict emoji ", uwb_is_extpict(128512))
+hold c12 = fx_num("extpict letter ", uwb_is_extpict(97))
+
+// String API and the failure contract.
+hold a1 = fx_num("count ab cd ", uwb_count("ab cd"))
+hold a2 = fx_text("breaks 3.14 ", fx_list(uwb_breaks("3.14")))
+hold a3 = fx_text("take 2 ", uwb_take("ab cd", 2))
+hold a4 = fx_text("drop 2 ", uwb_drop("ab cd", 2))
+hold a5 = fx_num("word1 start ", uwb_word_start("ab cd", 1))
+hold a6 = fx_num("word2 end ", uwb_word_end("ab cd", 2))
+hold a7 = fx_text("slice ", uwb_slice("ab cd", 3, 5))
+hold f1 = fx_num("empty breaks ", len(uwb_breaks_cp([])))
+hold f2 = fx_num("bad count ", uwb_count_cp([55296]))
+hold f3 = fx_num("overlong count ", uwb_count_cp(fx_long()))
+hold f4 = fx_num("bad text ", uwb_count(chr(255)))
+
+show "uword-compact-ok"
