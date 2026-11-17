@@ -455,6 +455,27 @@ make ep_next() -> num {
     uc_kind = uc_kind + 1
   }
 
+  // Bounded byte regular expressions: 288 frozen expectations. Pattern
+  // acceptance, spans, capture vectors, anchored and full matching,
+  // non-overlapping matches and replacement come from Python's own `re` in
+  // re.ASCII mode; the two contract sections pin this module's own documented
+  // refusals and limits, which Python does not share. Seed-min, gen2 and
+  // native_aot must all reproduce the same bytes.
+  hold rg_src = "selfhost/stdlib_regex_test.sa"
+  hold rg_want = "selfhost/stdlib_regex.want"
+  hold rg_present = bt_require_file(rg_want)
+  hold rg_kind = 0
+  while rg_kind < 3 {
+    hold rg_bin = concat(concat(dir, "/regex_"), gl_istr(rg_kind))
+    hold rg_c = ep_compile(rg_kind, rg_src, rg_bin)
+    hold rg_r = pg_capture(sh_quote(rg_bin), concat(rg_bin, ".out"))
+    hold rg_a = gl_assert_files_eq(concat(rg_bin, ".out"), rg_want, "regex independent oracle")
+    when rg_kind > 0 {
+      hold rg_p = gl_assert_files_eq(concat(dir, "/regex_0.out"), concat(rg_bin, ".out"), "regex backend parity")
+    }
+    rg_kind = rg_kind + 1
+  }
+
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
   // compiler must agree. The worker is a Sayanox program compiled by this gate.

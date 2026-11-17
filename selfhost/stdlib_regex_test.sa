@@ -1,0 +1,460 @@
+// Frozen expectations; do not edit by hand.
+// Independent oracle: Python 3.11 `re` in re.ASCII mode decides every
+// line except the two contract sections, which pin this module's own
+// documented refusals and limits. Regenerated with the retired generator.
+use "stdlib/regex.sa"
+
+make rxt_num(v: num) -> str {
+  when v == 0 {
+    give "0"
+  }
+  hold neg = 0
+  hold x = v
+  when x < 0 {
+    neg = 1
+    x = 0 - x
+  }
+  hold out = ""
+  while x > 0 {
+    hold d = x % 10
+    out = concat(chr(48 + d), out)
+    x = (x - d) / 10
+  }
+  when neg == 1 {
+    out = concat("-", out)
+  }
+  give out
+}
+
+make rxt_list(xs: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(xs) {
+    when i > 0 {
+      out = concat(out, ",")
+    }
+    out = concat(out, rxt_num(xs[i]))
+    i = i + 1
+  }
+  give out
+}
+
+// Repeat one byte n times, so the limit section can build a 1024-byte subject
+// and a 200-byte pattern without writing either of them out.
+make rxt_rep(n: num, ch: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < n {
+    out = concat(out, ch)
+    i = i + 1
+  }
+  give out
+}
+
+// Pattern acceptance: every form this module documents as supported.
+make rxt_sec_1_1() -> num {
+  show rxt_num(rx_valid("a"))
+  show rxt_num(rx_valid("ab|cd"))
+  show rxt_num(rx_valid("(a|b)+"))
+  show rxt_num(rx_valid("a{0,2}"))
+  show rxt_num(rx_valid("(ab){1,2}"))
+  show rxt_num(rx_valid("[a-c-e]"))
+  show rxt_num(rx_valid("[-a]"))
+  show rxt_num(rx_valid("[a-]"))
+  show rxt_num(rx_valid("[]a]"))
+  show rxt_num(rx_valid("[^]a]"))
+  show rxt_num(rx_valid("[\\]]"))
+  show rxt_num(rx_valid("[a\\]b]"))
+  show rxt_num(rx_valid("[!-/]"))
+  show rxt_num(rx_valid("[\\d\\s]"))
+  show rxt_num(rx_valid("[^\\w]"))
+  show rxt_num(rx_valid("[\\x20-\\x7E]+"))
+  show rxt_num(rx_valid("\\x41"))
+  show rxt_num(rx_valid("\\\\"))
+  give 0
+}
+
+make rxt_sec_1_2() -> num {
+  show rxt_num(rx_valid("\\."))
+  show rxt_num(rx_valid("\\+"))
+  show rxt_num(rx_valid("\\?"))
+  show rxt_num(rx_valid("\\["))
+  show rxt_num(rx_valid("\\{"))
+  show rxt_num(rx_valid("a\\{2\\}"))
+  show rxt_num(rx_valid("(a)(b)(c)"))
+  show rxt_num(rx_valid("((a)(b))c"))
+  show rxt_num(rx_valid("(?:a|b)c"))
+  show rxt_num(rx_valid("a||b"))
+  show rxt_num(rx_valid("|a"))
+  show rxt_num(rx_valid("a|"))
+  show rxt_num(rx_valid("()"))
+  show rxt_num(rx_valid("(?:)"))
+  show rxt_num(rx_valid("\\(\\)"))
+  show rxt_num(rx_valid("a{1}"))
+  show rxt_num(rx_valid("a{0,}"))
+  show rxt_num(rx_valid("a{2,}"))
+  give 0
+}
+
+make rxt_sec_1_3() -> num {
+  show rxt_num(rx_valid("(a|b){0,3}"))
+  show rxt_num(rx_valid("\\b\\w+\\b"))
+  show rxt_num(rx_valid("\\B"))
+  show rxt_num(rx_valid("^"))
+  show rxt_num(rx_valid("$"))
+  show rxt_num(rx_valid("\\A"))
+  show rxt_num(rx_valid("\\Z"))
+  show rxt_num(rx_valid("a$|^b"))
+  show rxt_num(rx_valid("(^a|b$)"))
+  show rxt_num(rx_valid("[-]"))
+  show rxt_num(rx_valid("[^-]"))
+  show rxt_num(rx_valid("[a^]"))
+  show rxt_num(rx_valid("[^^]"))
+  show rxt_num(rx_valid("\\^"))
+  show rxt_num(rx_valid("\\$"))
+  show rxt_num(rx_valid("\\|"))
+  show rxt_num(rx_valid("\\/"))
+  show rxt_num(rx_valid("\\ "))
+  give 0
+}
+
+make rxt_sec_1_4() -> num {
+  show rxt_num(rx_valid("a.b"))
+  show rxt_num(rx_valid(".*"))
+  show rxt_num(rx_valid(".+?"))
+  show rxt_num(rx_valid("\\d{1,3}"))
+  show rxt_num(rx_valid("[0-9]{2,4}?"))
+  show rxt_num(rx_valid("x{0}y"))
+  show rxt_num(rx_valid("a{64}"))
+  show rxt_num(rx_valid("(?:ab|cd){1,3}?"))
+  show rxt_num(rx_valid("[^a-z0-9_]"))
+  show rxt_num(rx_valid("\\s\\S\\w\\W\\d\\D"))
+  give 0
+}
+
+// First-match spans and captures, Python re.search order.
+make rxt_sec_2_1() -> num {
+  show rxt_list(rx_find("a", "banana"))
+  show rxt_list(rx_find("a+", "caaat"))
+  show rxt_list(rx_find("ana", "banana"))
+  show rxt_list(rx_find("xyz", "banana"))
+  show rxt_list(rx_find("a|ab", "xab"))
+  show rxt_list(rx_find("ab|a", "xab"))
+  show rxt_list(rx_find("(a)(b)?", "xa"))
+  show rxt_list(rx_find("(a)(b)?", "xab"))
+  show rxt_list(rx_find("((a)(b))c", "xabc"))
+  show rxt_list(rx_find("a{2,3}", "aaaa"))
+  show rxt_list(rx_find("a{2,3}?", "aaaa"))
+  show rxt_list(rx_find("^a+$", "aaa"))
+  show rxt_list(rx_find("^a+$", "baaa"))
+  show rxt_list(rx_find("a$", "aba\n"))
+  show rxt_list(rx_find("a$", "abab"))
+  show rxt_list(rx_find("\\d+", "x42"))
+  show rxt_list(rx_find("[^a-z]+", "ab12cd"))
+  show rxt_list(rx_find("\\.", "a.b"))
+  give 0
+}
+
+make rxt_sec_2_2() -> num {
+  show rxt_list(rx_find("(?:ab)+", "ababx"))
+  show rxt_list(rx_find("a*?b", "aaab"))
+  show rxt_list(rx_find("$", "ab"))
+  show rxt_list(rx_find("\\Z", "ab"))
+  show rxt_list(rx_find("x*", "bbb"))
+  show rxt_list(rx_find("\\bcat\\b", "a cat."))
+  show rxt_list(rx_find("\\Bcat", "scat"))
+  show rxt_list(rx_find("\\x41+", "zAAA"))
+  show rxt_list(rx_find("[0-9a-f]+", "zzBEEFzz"))
+  show rxt_list(rx_find("(ab|a)(c|bc)", "abc"))
+  show rxt_list(rx_find("a.c", "abc"))
+  show rxt_list(rx_find("a.c", "a\nc"))
+  show rxt_list(rx_find("[]]", "]"))
+  show rxt_list(rx_find("[a^]", "b^"))
+  show rxt_list(rx_find("\\)", "a)b"))
+  show rxt_list(rx_find("(a+)(a+)", "aaaa"))
+  show rxt_list(rx_find("(a+?)b", "aaab"))
+  show rxt_list(rx_find("[\\d]+", "x99"))
+  give 0
+}
+
+make rxt_sec_2_3() -> num {
+  show rxt_list(rx_find("[^\\d]+", "12ab34"))
+  show rxt_list(rx_find("a?", "bbb"))
+  show rxt_list(rx_find("a??", "aaa"))
+  show rxt_list(rx_find("\\s+", "a \t b"))
+  show rxt_list(rx_find("\\S+", "  ab  "))
+  show rxt_list(rx_find("\\w+", "_-a1-"))
+  show rxt_list(rx_find("\\W+", "ab..cd"))
+  show rxt_list(rx_find("(a|b)*c", "ababc"))
+  show rxt_list(rx_find("(|a)b", "b"))
+  show rxt_list(rx_find("(a|)b", "ab"))
+  show rxt_list(rx_find("x{0}", "xxx"))
+  show rxt_list(rx_find("x{0}y", "y"))
+  show rxt_list(rx_find("x{1,}", "xxx"))
+  show rxt_list(rx_find("x{1,}?", "xxx"))
+  show rxt_list(rx_find("(a){2}", "aa"))
+  show rxt_list(rx_find("(a){2,3}", "aaaa"))
+  show rxt_list(rx_find("^(a|b)+$", "abba"))
+  show rxt_list(rx_find("a.*b", "axxbxxb"))
+  give 0
+}
+
+make rxt_sec_2_4() -> num {
+  show rxt_list(rx_find("a.*?b", "axxbxxb"))
+  show rxt_list(rx_find("[^\\n]+", "ab\ncd"))
+  show rxt_list(rx_find("(\\d)(\\d)(\\d)", "a123"))
+  show rxt_list(rx_find("\\b\\w+\\b", "  hi there "))
+  show rxt_list(rx_find("(a?)(a?)b", "aab"))
+  show rxt_list(rx_find("(a|b|c)+", "cabx"))
+  show rxt_list(rx_find("((a)|(b))+", "abab"))
+  show rxt_list(rx_find("(a(b(c)))", "xabc"))
+  show rxt_list(rx_find("(ab)+?", "ababx"))
+  show rxt_list(rx_find("[-a-c]+", "-abc-d"))
+  show rxt_list(rx_find("[!-/]+", "a!-/b"))
+  show rxt_list(rx_find("[\\d\\s]+", "a1 2b"))
+  show rxt_list(rx_find("[^\\w]+", "a..b"))
+  show rxt_list(rx_find("(a*)(a*)", "aaa"))
+  show rxt_list(rx_find("(a+)(a+)", "aaaa"))
+  show rxt_list(rx_find("a*a*", "aaa"))
+  show rxt_list(rx_find("(a|aa)+", "aaaa"))
+  show rxt_list(rx_find("(a+)+b", "aaaab"))
+  give 0
+}
+
+make rxt_sec_2_5() -> num {
+  show rxt_list(rx_find("(\\w+)\\s+(\\w+)", "hello world"))
+  show rxt_list(rx_find("(a)(b)?(c)", "ac"))
+  show rxt_list(rx_find("(a)(b)?(c)", "abc"))
+  show rxt_list(rx_find("(a)(b)*", "abbb"))
+  show rxt_list(rx_find("(a|b)*abb", "aababb"))
+  show rxt_list(rx_find("[A-Z][a-z]+", "hello World"))
+  show rxt_list(rx_find("(.)(.)", "ab"))
+  show rxt_list(rx_find("(..)+", "abcdef"))
+  show rxt_list(rx_find("(a?)(a?)", "aa"))
+  show rxt_list(rx_find("[^\\n]*", "ab\ncd"))
+  show rxt_list(rx_find(".*", "ab\ncd"))
+  show rxt_list(rx_find("(a+b)+?c", "aababc"))
+  show rxt_list(rx_find("^.{3}$", "abc"))
+  show rxt_list(rx_find("^.{3}$", "ab"))
+  show rxt_list(rx_find("[0-9a-zA-Z_]+", "a_1-B"))
+  show rxt_list(rx_find("((((a))))", "a"))
+  show rxt_list(rx_find("(a(b(c(d))))", "abcd"))
+  show rxt_list(rx_find("\\x41\\x42", "AB"))
+  give 0
+}
+
+make rxt_sec_2_6() -> num {
+  show rxt_list(rx_find("a{1,2}b{1,2}", "aabb"))
+  show rxt_list(rx_find("(a)(?:b)(c)", "abc"))
+  give 0
+}
+
+// Anchored match and full match, including fullmatch backtracking.
+make rxt_sec_3_1() -> num {
+  show rxt_num(rx_match("a+", "aaa"))
+  show rxt_num(rx_full("a+", "aaa"))
+  show rxt_num(rx_match("a+", "aaab"))
+  show rxt_num(rx_full("a+", "aaab"))
+  show rxt_num(rx_match("b*", "aaa"))
+  show rxt_num(rx_full("b*", "aaa"))
+  show rxt_num(rx_match("(a)(b)?", "a"))
+  show rxt_num(rx_full("(a)(b)?", "a"))
+  show rxt_num(rx_match("^a", "a"))
+  show rxt_num(rx_full("^a", "a"))
+  show rxt_num(rx_match("a|ab", "ab"))
+  show rxt_num(rx_full("a|ab", "ab"))
+  show rxt_num(rx_match("\\d{3}", "123"))
+  show rxt_num(rx_full("\\d{3}", "123"))
+  show rxt_num(rx_match("\\d{3}", "1234"))
+  show rxt_num(rx_full("\\d{3}", "1234"))
+  show rxt_num(rx_match("(a|ab)c", "abc"))
+  show rxt_num(rx_full("(a|ab)c", "abc"))
+  give 0
+}
+
+make rxt_sec_3_2() -> num {
+  show rxt_num(rx_match("x{2,3}", "xx"))
+  show rxt_num(rx_full("x{2,3}", "xx"))
+  give 0
+}
+
+// Non-overlapping matches, including the empty-match advance rule.
+make rxt_sec_4_1() -> num {
+  show rxt_list(rx_find_all("a", "banana"))
+  show rxt_num(rx_count("a", "banana"))
+  show rxt_list(rx_find_all("[0-9]+", "a1b22c333"))
+  show rxt_num(rx_count("[0-9]+", "a1b22c333"))
+  show rxt_list(rx_find_all("x*", "abc"))
+  show rxt_num(rx_count("x*", "abc"))
+  show rxt_list(rx_find_all("", "abc"))
+  show rxt_num(rx_count("", "abc"))
+  show rxt_list(rx_find_all("a|b", "cabdab"))
+  show rxt_num(rx_count("a|b", "cabdab"))
+  show rxt_list(rx_find_all("\\b\\w+\\b", "one two three"))
+  show rxt_num(rx_count("\\b\\w+\\b", "one two three"))
+  show rxt_list(rx_find_all("(a)(b)?", "ab a ab"))
+  show rxt_num(rx_count("(a)(b)?", "ab a ab"))
+  show rxt_list(rx_find_all("\\s+", "a b\tc\nd"))
+  show rxt_num(rx_count("\\s+", "a b\tc\nd"))
+  show rxt_list(rx_find_all("a?", "aaa"))
+  show rxt_num(rx_count("a?", "aaa"))
+  give 0
+}
+
+make rxt_sec_4_2() -> num {
+  show rxt_list(rx_find_all("(|a)", "ab"))
+  show rxt_num(rx_count("(|a)", "ab"))
+  show rxt_list(rx_find_all(".*?", "aab"))
+  show rxt_num(rx_count(".*?", "aab"))
+  show rxt_list(rx_find_all("[0-9a-f]", "zz1aFz"))
+  show rxt_num(rx_count("[0-9a-f]", "zz1aFz"))
+  give 0
+}
+
+// Replacements: & for the whole match, \1..\9 for groups.
+make rxt_sec_5_1() -> num {
+  show rx_replace("a", "banana", "o")
+  show rx_replace_first("a", "banana", "o")
+  show rx_replace("(a)(n)", "banana", "\\2\\1")
+  show rx_replace_first("(a)(n)", "banana", "\\2\\1")
+  show rx_replace("a+", "caaat", "[&]")
+  show rx_replace_first("a+", "caaat", "[&]")
+  show rx_replace("", "abc", "-")
+  show rx_replace_first("", "abc", "-")
+  show rx_replace("[0-9]", "a1b2", "#")
+  show rx_replace_first("[0-9]", "a1b2", "#")
+  show rx_replace("(\\w+)@(\\w+)", "a@b c@d", "\\2:\\1")
+  show rx_replace_first("(\\w+)@(\\w+)", "a@b c@d", "\\2:\\1")
+  show rx_replace("x", "abc", "y")
+  show rx_replace_first("x", "abc", "y")
+  show rx_replace("a*", "baaac", "<&>")
+  show rx_replace_first("a*", "baaac", "<&>")
+  show rx_replace("(a)?b", "b ab", "\\1")
+  show rx_replace_first("(a)?b", "b ab", "\\1")
+  give 0
+}
+
+make rxt_sec_5_2() -> num {
+  show rx_replace("\\s+", " a  b ", "_")
+  show rx_replace_first("\\s+", " a  b ", "_")
+  show rx_replace("(a|b)", "abc", "&&")
+  show rx_replace_first("(a|b)", "abc", "&&")
+  show rx_replace("(a)(b)?(c)", "ac", "\\1\\2\\3")
+  show rx_replace_first("(a)(b)?(c)", "ac", "\\1\\2\\3")
+  show rx_replace("(ab)+", "ababab", "<&>")
+  show rx_replace_first("(ab)+", "ababab", "<&>")
+  show rx_replace("[aeiou]", "education", "*")
+  show rx_replace_first("[aeiou]", "education", "*")
+  show rx_replace("\\b(\\w)", "two words", "\\1!")
+  show rx_replace_first("\\b(\\w)", "two words", "\\1!")
+  show rx_replace("(x)?(y)?", "z", "[\\1\\2]")
+  show rx_replace_first("(x)?(y)?", "z", "[\\1\\2]")
+  give 0
+}
+
+// Literal escaping, and every escaped pattern matching its own text.
+make rxt_sec_6_1() -> num {
+  show rx_escape("a.b*c")
+  show rxt_num(rx_full(rx_escape("a.b*c"), "a.b*c"))
+  show rx_escape("[]")
+  show rxt_num(rx_full(rx_escape("[]"), "[]"))
+  show rx_escape("\\d")
+  show rxt_num(rx_full(rx_escape("\\d"), "\\d"))
+  show rx_escape("x+y")
+  show rxt_num(rx_full(rx_escape("x+y"), "x+y"))
+  show rx_escape("(a)")
+  show rxt_num(rx_full(rx_escape("(a)"), "(a)"))
+  show rx_escape("a b")
+  show rxt_num(rx_full(rx_escape("a b"), "a b"))
+  show rx_escape("100%")
+  show rxt_num(rx_full(rx_escape("100%"), "100%"))
+  show rx_escape("^$|?")
+  show rxt_num(rx_full(rx_escape("^$|?"), "^$|?"))
+  show rx_escape("a{2,3}")
+  show rxt_num(rx_full(rx_escape("a{2,3}"), "a{2,3}"))
+  give 0
+}
+
+make rxt_sec_6_2() -> num {
+  show rx_escape("-_=:;,")
+  show rxt_num(rx_full(rx_escape("-_=:;,"), "-_=:;,"))
+  show rx_escape("a\nb")
+  show rxt_num(rx_full(rx_escape("a\nb"), "a\nb"))
+  show rx_escape("a\tb")
+  show rxt_num(rx_full(rx_escape("a\tb"), "a\tb"))
+  give 0
+}
+
+// Contract: forms Python accepts that this bounded engine refuses.
+make rxt_sec_7_1() -> num {
+  show rxt_num(rx_valid("[[:alpha:]]"))
+  show rxt_num(rx_valid("(a*)*"))
+  show rxt_num(rx_valid("(a?)+"))
+  show rxt_num(rx_valid("(a|)+"))
+  show rxt_num(rx_valid("(?=a)"))
+  show rxt_num(rx_valid("(?!a)"))
+  show rxt_num(rx_valid("(?<=a)"))
+  show rxt_num(rx_valid("(?i)a"))
+  show rxt_num(rx_valid("a*+"))
+  show rxt_num(rx_valid("(?P<x>a)"))
+  show rxt_num(rx_valid("\\1"))
+  show rxt_num(rx_valid("\\q"))
+  show rxt_num(rx_valid("a{3,2}"))
+  show rxt_num(rx_valid("a{65}"))
+  show rxt_num(rx_valid("a{1,2,3}"))
+  show rxt_num(rx_valid("a{,3}"))
+  show rxt_num(rx_valid(""))
+  show rxt_list(rx_find("(", "abc"))
+  give 0
+}
+
+make rxt_sec_7_2() -> num {
+  show rxt_list(rx_find("[z-a]", "abc"))
+  show rxt_num(rx_search("\\1", "a"))
+  give 0
+}
+
+// Contract: input, pattern, match and step limits, pinned.
+make rxt_sec_8_1() -> num {
+  show rxt_num(len(rxt_rep(1024, "a")))
+  show rxt_num(rx_search("a+", rxt_rep(1024, "a")))
+  show rxt_num(rx_search("a+", rxt_rep(1025, "a")))
+  show rxt_list(rx_find("a+", rxt_rep(1025, "a")))
+  show rxt_num(rx_search(rxt_rep(200, "a"), "aaa"))
+  show rxt_num(rx_search(rxt_rep(201, "a"), "aaa"))
+  show rxt_num(len(rx_find_all("a", rxt_rep(300, "a"))))
+  show rxt_num(rx_count("", rxt_rep(4, "b")))
+  show rxt_list(rx_find("(a+)+$", concat(rxt_rep(22, "a"), "X")))
+  show rxt_num(rx_search("(a+)+$", concat(rxt_rep(22, "a"), "X")))
+  show rxt_num(rxt_rep(22, "a") != "")
+  show rxt_num(rx_budget() > 0)
+  give 0
+}
+
+make rxt_suite() -> num {
+  hold c_1_1 = rxt_sec_1_1()
+  hold c_1_2 = rxt_sec_1_2()
+  hold c_1_3 = rxt_sec_1_3()
+  hold c_1_4 = rxt_sec_1_4()
+  hold c_2_1 = rxt_sec_2_1()
+  hold c_2_2 = rxt_sec_2_2()
+  hold c_2_3 = rxt_sec_2_3()
+  hold c_2_4 = rxt_sec_2_4()
+  hold c_2_5 = rxt_sec_2_5()
+  hold c_2_6 = rxt_sec_2_6()
+  hold c_3_1 = rxt_sec_3_1()
+  hold c_3_2 = rxt_sec_3_2()
+  hold c_4_1 = rxt_sec_4_1()
+  hold c_4_2 = rxt_sec_4_2()
+  hold c_5_1 = rxt_sec_5_1()
+  hold c_5_2 = rxt_sec_5_2()
+  hold c_6_1 = rxt_sec_6_1()
+  hold c_6_2 = rxt_sec_6_2()
+  hold c_7_1 = rxt_sec_7_1()
+  hold c_7_2 = rxt_sec_7_2()
+  hold c_8_1 = rxt_sec_8_1()
+  show "regex-done"
+  give 0
+}
+
+hold rxt_run = rxt_suite()

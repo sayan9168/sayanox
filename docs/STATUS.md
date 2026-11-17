@@ -1,5 +1,55 @@
 # Status
 
+**2026-11-17 update: byte regular expressions — a bounded engine, not a guess**
+
+`stdlib/regex.sa` (`rx_*`) answers "does this text contain that shape, and
+where" in Sayanox, over bytes: literals, `.`, ASCII classes with ranges and the
+`\d`/`\w`/`\s` complements, `\xHH` and control escapes, capturing and `(?:`
+groups, alternation, greedy and lazy `*` `+` `?` `{m}` `{m,}` `{m,n}`, and
+`^` `$` `\A` `\Z` `\b` `\B`. Matching is a backtracking VM over a flat code
+list, and its preference order is Python's: `a|ab` on `"ab"` matches `"a"`, `a*`
+is greedy, and fullmatch backtracks until the match covers the subject. `.` is
+one byte and never matches LF; `$` also matches before a trailing LF. Because a
+Sayanox list holds numbers only, the API returns spans and one group's text at a
+time (`rx_find`, `rx_span`, `rx_groups`, `rx_group`, `rx_text`, `rx_match`,
+`rx_full`, `rx_search`, `rx_find_all`, `rx_count`, `rx_replace`,
+`rx_replace_first`, `rx_escape`) rather than a list of strings.
+
+The interesting part is what it refuses. Backreferences, lookaround, inline
+flags, named groups, possessive quantifiers, POSIX classes, unknown letter
+escapes, a range whose end is below its start, an unterminated class or group, a
+quantifier with nothing to repeat, `{m,n}` with `m > n`, and — the one that
+matters most — an **unbounded** repetition whose body can match the empty string
+(`(a*)*`, `(a?)+`) all make `rx_valid` answer 0 and every matcher answer -1. A
+bounded engine that says "no" is useful; one that silently reinterprets
+`[[:alpha:]]` as a class of `[`, `:`, `a`, `l`, `p`, `h` is not, and the first
+draft did exactly that until the fuzz corpus caught it. The limits are equally
+explicit: 200-byte patterns, 1024-byte subjects, 16 groups, 256 matches per
+find-all/replace, and a 250,000-step budget per anchored attempt that reports
+exhaustion as -1 instead of hanging on a pathological pattern.
+
+Verification is **288 frozen expectations** in
+`selfhost/stdlib_regex_test.sa` / `.want`: 64 acceptance rows, 92 first-match
+span-and-capture rows, 20 anchored/full rows, 24 non-overlapping-match and count
+rows, 32 replacement rows, 24 escaping rows, and two hand-written contract
+sections (20 refusals, 12 limits) because Python accepts forms this engine
+refuses. Everything outside the contract sections is computed outside Sayanox
+with Python 3.11's own `re` in `re.ASCII` mode. Behind the fixture, the engine
+was differentially fuzzed against that oracle on 3,520 generated
+pattern/subject rows and 720 replacement rows with zero disagreements — and that
+fuzz found four real defects the curated corpus missed: a class after a group
+reset the group count to zero, unset groups started at 0 instead of -1, a
+`{m,n}` parse error fell back to literal text, and `rx_full` could not
+backtrack into a longer alternative. The empty-match rule is Python's post-3.7
+one (resume at the same offset with an empty match refused), which is why
+`.*?` on `"ab"` yields `(0,0)`, `(0,1)`, `(1,1)`, `(1,2)`, `(2,2)`. The fixture
+matches byte for byte on seed-min, gen2 and `native_aot` through
+`test-stdlib-next`, and `examples/regex.sa` agrees on seed-min, gen2,
+native_aot and the full native compiler. **Not** modelled: Unicode-aware
+classes, case-insensitive and multiline modes, lookaround, backreferences,
+splitting into a list of strings (that list type does not exist), and streaming
+a subject larger than the cap. So R07 stays open.
+
 **2026-11-16 update: word boundaries — UAX #29**
 
 `stdlib/uword.sa` (`uwb_*`) answers where words begin and end, which is the

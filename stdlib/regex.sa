@@ -1,0 +1,1608 @@
+// stdlib/regex.sa -- bounded byte-oriented regular expressions (prefix rx_).
+//
+// Sayanox strings are NUL-free byte strings, so this engine matches bytes, not
+// Unicode code points: `.` is one byte, a class covers 0..255, and a pattern
+// never has to decode UTF-8. Use stdlib/utf8.sa + stdlib/ugraph.sa when the
+// question is about characters rather than the bytes that carry them.
+//
+// Supported syntax (Python `re` spelling, ASCII-mode classes):
+//
+//   abc        literal bytes                \d \D \w \W \s \S   ASCII classes
+//   .          any byte except LF           \n \r \t \f \v \a   escapes
+//   [abc]      class, [^abc] negated        \xHH                one hex byte
+//   [a-z0-9_]  ranges                       \\ \. \[ ...        literal
+//   (x)        capturing group              (?:x)               non-capturing
+//   x* x+ x?   greedy repetition            x*? x+? x??         lazy repetition
+//   x{m} x{m,} x{m,n}  counted repetition   x{m,n}?             lazy counted
+//   x|y        alternation                  ^ $ \A \Z \b \B      anchors
+//
+// `\d` is [0-9], `\w` is [0-9A-Za-z_] and `\s` is [ \t\n\v\f\r], exactly like
+// Python's re.ASCII mode. Preference order is Python's backtracking order:
+// `a|ab` on "ab" matches "a", `a*` is greedy, `a*?` is lazy, and an alternation
+// is tried left to right. `.` does not match LF and `$` matches at the end of
+// the subject or just before a trailing LF, as in Python without flags.
+//
+// Deliberately refused (rx_valid gives 0 and rx_find gives [-1]; rx_search,
+// rx_match and rx_full give 0, rx_span/rx_groups/rx_find_all give [] and
+// rx_replace returns the subject unchanged): backreferences
+// (`\1`), lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`), inline flags (`(?i)`),
+// possessive quantifiers (`x*+`), named groups, unknown letter escapes, a class
+// range whose end is below its start, an unterminated class or group, a
+// quantifier with nothing to repeat, and an *unbounded* repetition whose body
+// can match the empty string (`(a*)*`), because that would loop forever.
+//
+// The limits are stated rather than implied: rx_max_pattern() bytes per pattern,
+// rx_max_input() bytes per subject, rx_max_groups() capturing groups,
+// rx_max_matches() matches per find-all/replace, rx_max_repeat() for one counted
+// repetition and rx_max_output() bytes for a replacement result. The matcher is a real
+// backtracking VM, so a pathological pattern can still need exponential time;
+// rx_budget() bounds it with a step count, and running out is reported as -1,
+// apart from "no match" (0). A bounded engine should say when it gave up.
+//
+// A capture vector is 2*(groups+1) numbers: group 0 is the whole match and
+// group k is the k-th `(`. An unset group is -1. Sayanox lists hold numbers
+// only, so the API returns spans and one group's text at a time; rx_group and
+// rx_text slice the subject for you.
+//
+// Verification: selfhost/stdlib_regex_test.sa carries frozen expectations
+// computed outside Sayanox with Python's own `re` module in re.ASCII mode, and
+// runs on seed-min, gen2 and native_aot through `test-stdlib-next`.
+
+// ---------------------------------------------------------------------------
+// Limits and opcodes
+// ---------------------------------------------------------------------------
+
+make rx_max_pattern() -> num {
+  give 200
+}
+
+make rx_max_input() -> num {
+  give 1024
+}
+
+make rx_max_groups() -> num {
+  give 16
+}
+
+make rx_max_matches() -> num {
+  give 256
+}
+
+make rx_max_repeat() -> num {
+  give 64
+}
+
+// Steps per anchored attempt. A whole search can cost up to len(subject)+1
+// attempts, which is why this is a per-attempt bound and not a promise about
+// one rx_find call.
+make rx_budget() -> num {
+  give 250000
+}
+
+make rx_max_output() -> num {
+  give 65536
+}
+
+make rx_op_match() -> num {
+  give 0
+}
+
+make rx_op_lit() -> num {
+  give 1
+}
+
+make rx_op_any() -> num {
+  give 2
+}
+
+make rx_op_class() -> num {
+  give 3
+}
+
+make rx_op_split() -> num {
+  give 4
+}
+
+make rx_op_jmp() -> num {
+  give 5
+}
+
+make rx_op_save() -> num {
+  give 6
+}
+
+make rx_op_bol() -> num {
+  give 7
+}
+
+make rx_op_eol() -> num {
+  give 8
+}
+
+make rx_op_eos() -> num {
+  give 9
+}
+
+make rx_op_word() -> num {
+  give 10
+}
+
+make rx_op_nword() -> num {
+  give 11
+}
+
+// A class instruction is three header words plus a 256-entry bitmap.
+make rx_class_words() -> num {
+  give 259
+}
+
+// ---------------------------------------------------------------------------
+// Small portable helpers
+// ---------------------------------------------------------------------------
+
+// Integer division that only uses `/` on an exactly divisible value.
+make rx_idiv(x: num, d: num) -> num {
+  hold r = x % d
+  hold y = x - r
+  give y / d
+}
+
+// rx_slice_s(s, a, b) is `s[a:b]` with Python's clamping. Spans from this
+// module are byte offsets, so this is what turns a span into text. Public
+// because every caller would otherwise rewrite it.
+make rx_slice_s(s: str, a: num, b: num) -> str {
+  when a < 0 {
+    a = 0
+  }
+  when b > len(s) {
+    b = len(s)
+  }
+  hold out = ""
+  hold i = a
+  while i < b {
+    out = concat(out, chr(s[i]))
+    i = i + 1
+  }
+  give out
+}
+
+// List helpers used by the matchers; not part of the documented surface.
+make rx_lslice(xs: list, a: num, b: num) -> list {
+  when a < 0 {
+    a = 0
+  }
+  when b > len(xs) {
+    b = len(xs)
+  }
+  hold out = []
+  hold i = a
+  while i < b {
+    out = push(out, xs[i])
+    i = i + 1
+  }
+  give out
+}
+
+make rx_join(a: list, b: list) -> list {
+  hold out = a
+  hold i = 0
+  while i < len(b) {
+    out = push(out, b[i])
+    i = i + 1
+  }
+  give out
+}
+
+make rx_neg_ones(n: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < n {
+    out = push(out, 0 - 1)
+    i = i + 1
+  }
+  give out
+}
+
+make rx_zeros(n: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < n {
+    out = push(out, 0)
+    i = i + 1
+  }
+  give out
+}
+
+make rx_front2(xs: list, a: num) -> list {
+  hold out = []
+  out = push(out, a)
+  hold i = 0
+  while i < len(xs) {
+    out = push(out, xs[i])
+    i = i + 1
+  }
+  give out
+}
+
+make rx_mk(op: num, a: num, b: num) -> list {
+  hold out = []
+  out = push(out, op)
+  out = push(out, a)
+  out = push(out, b)
+  give out
+}
+
+// ---------------------------------------------------------------------------
+// Parser results: [ok, pos, nullable, groups, ...code]
+// A failure is [0, 0, 0, groups] with no code words.
+// ---------------------------------------------------------------------------
+
+make rx_res(ok: num, pos: num, nul: num, ng: num, code: list) -> list {
+  hold out = []
+  out = push(out, ok)
+  out = push(out, pos)
+  out = push(out, nul)
+  out = push(out, ng)
+  out = rx_join(out, code)
+  give out
+}
+
+make rx_fail() -> list {
+  hold out = []
+  out = push(out, 0)
+  out = push(out, 0)
+  out = push(out, 0)
+  out = push(out, 0)
+  give out
+}
+
+make rx_r_ok(r: list) -> num {
+  give r[0]
+}
+
+make rx_r_pos(r: list) -> num {
+  give r[1]
+}
+
+make rx_r_null(r: list) -> num {
+  give r[2]
+}
+
+make rx_r_ng(r: list) -> num {
+  give r[3]
+}
+
+make rx_r_code(r: list) -> list {
+  give rx_lslice(r, 4, len(r))
+}
+
+// ---------------------------------------------------------------------------
+// Class bitmaps
+// ---------------------------------------------------------------------------
+
+make rx_bitmap_empty() -> list {
+  give rx_zeros(256)
+}
+
+make rx_bitmap_set(bm: list, lo: num, hi: num) -> list {
+  hold out = []
+  hold i = 0
+  while i < 256 {
+    hold v = bm[i]
+    when i >= lo and i <= hi {
+      v = 1
+    }
+    out = push(out, v)
+    i = i + 1
+  }
+  give out
+}
+
+make rx_bitmap_or(bm: list, other: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 256 {
+    hold v = bm[i]
+    when other[i] == 1 {
+      v = 1
+    }
+    out = push(out, v)
+    i = i + 1
+  }
+  give out
+}
+
+make rx_bitmap_or_not(bm: list, other: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 256 {
+    hold v = bm[i]
+    when other[i] == 0 {
+      v = 1
+    }
+    out = push(out, v)
+    i = i + 1
+  }
+  give out
+}
+
+make rx_bitmap_negate(bm: list) -> list {
+  hold out = []
+  hold i = 0
+  while i < 256 {
+    hold v = 1
+    when bm[i] == 1 {
+      v = 0
+    }
+    out = push(out, v)
+    i = i + 1
+  }
+  give out
+}
+
+// set ids: 1 = \d, 2 = \w, 3 = \s
+make rx_bitmap_set_of(id: num) -> list {
+  hold bm = rx_bitmap_empty()
+  when id == 1 {
+    bm = rx_bitmap_set(bm, 48, 57)
+  }
+  when id == 2 {
+    bm = rx_bitmap_set(bm, 48, 57)
+    bm = rx_bitmap_set(bm, 65, 90)
+    bm = rx_bitmap_set(bm, 97, 122)
+    bm = rx_bitmap_set(bm, 95, 95)
+  }
+  when id == 3 {
+    bm = rx_bitmap_set(bm, 9, 13)
+    bm = rx_bitmap_set(bm, 32, 32)
+  }
+  give bm
+}
+
+make rx_class_code(bm: list) -> list {
+  hold out = rx_mk(rx_op_class(), 0, 0)
+  out = rx_join(out, bm)
+  give out
+}
+
+// ---------------------------------------------------------------------------
+// Escapes
+// ---------------------------------------------------------------------------
+
+make rx_is_hex(b: num) -> num {
+  when b >= 48 and b <= 57 {
+    give 1
+  }
+  when b >= 65 and b <= 70 {
+    give 1
+  }
+  when b >= 97 and b <= 102 {
+    give 1
+  }
+  give 0
+}
+
+make rx_hex_val(b: num) -> num {
+  when b >= 48 and b <= 57 {
+    give b - 48
+  }
+  when b >= 65 and b <= 70 {
+    give b - 55
+  }
+  give b - 87
+}
+
+make rx_is_letter(b: num) -> num {
+  when b >= 65 and b <= 90 {
+    give 1
+  }
+  when b >= 97 and b <= 122 {
+    give 1
+  }
+  give 0
+}
+
+make rx_simple_escape(b: num) -> num {
+  when b == 110 {
+    give 10
+  }
+  when b == 114 {
+    give 13
+  }
+  when b == 116 {
+    give 9
+  }
+  when b == 102 {
+    give 12
+  }
+  when b == 118 {
+    give 11
+  }
+  when b == 97 {
+    give 7
+  }
+  give 0 - 1
+}
+
+// One escaped byte, with i pointing at the backslash; -1 if not a byte escape.
+make rx_escape_byte(p: str, i: num) -> num {
+  when i + 1 >= len(p) {
+    give 0 - 1
+  }
+  hold c = p[i + 1]
+  hold e = rx_simple_escape(c)
+  when e >= 0 {
+    give e
+  }
+  when c == 120 and i + 3 < len(p) {
+    hold hi_ch = p[i + 2]
+    hold lo_ch = p[i + 3]
+    hold hi_ok = rx_is_hex(hi_ch)
+    hold lo_ok = rx_is_hex(lo_ch)
+    when hi_ok == 1 and lo_ok == 1 {
+      hold hi_v = rx_hex_val(hi_ch)
+      hold lo_v = rx_hex_val(lo_ch)
+      give hi_v * 16 + lo_v
+    }
+  }
+  when rx_is_letter(c) == 1 {
+    give 0 - 1
+  }
+  when c >= 48 and c <= 57 {
+    give 0 - 1
+  }
+  give c
+}
+
+make rx_escape_len(p: str, i: num) -> num {
+  when i + 1 < len(p) and p[i + 1] == 120 {
+    give 4
+  }
+  give 2
+}
+
+// Outside a class: \d \D \w \W \s \S \b \B \A \Z and escaped literals.
+make rx_p_escape(p: str, i: num, ng: num) -> list {
+  hold r = rx_fail()
+  when i + 1 >= len(p) {
+    give r
+  }
+  hold c = p[i + 1]
+  hold b = rx_escape_byte(p, i)
+  when c == 100 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_set_of(1)))
+  }
+  when c == 68 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_negate(rx_bitmap_set_of(1))))
+  }
+  when c == 119 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_set_of(2)))
+  }
+  when c == 87 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_negate(rx_bitmap_set_of(2))))
+  }
+  when c == 115 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_set_of(3)))
+  }
+  when c == 83 {
+    give rx_res(1, i + 2, 0, ng, rx_class_code(rx_bitmap_negate(rx_bitmap_set_of(3))))
+  }
+  when c == 98 {
+    give rx_res(1, i + 2, 1, ng, rx_mk(rx_op_word(), 0, 0))
+  }
+  when c == 66 {
+    give rx_res(1, i + 2, 1, ng, rx_mk(rx_op_nword(), 0, 0))
+  }
+  when c == 65 {
+    give rx_res(1, i + 2, 1, ng, rx_mk(rx_op_bol(), 0, 0))
+  }
+  when c == 90 {
+    give rx_res(1, i + 2, 1, ng, rx_mk(rx_op_eos(), 0, 0))
+  }
+  when b >= 0 {
+    give rx_res(1, i + rx_escape_len(p, i), 0, ng, rx_mk(rx_op_lit(), b, 0))
+  }
+  give r
+}
+
+// ---------------------------------------------------------------------------
+// Character classes
+// ---------------------------------------------------------------------------
+
+// [ok, lo, hi, is_set, set_id, negated_set, next]
+make rx_class_atom(p: str, i: num) -> list {
+  hold out = []
+  hold c = p[i]
+  when c == 92 {
+    hold ok = 0
+    hold lo = 0
+    hold set_id = 0
+    hold negset = 0
+    when i + 1 < len(p) {
+      hold e = p[i + 1]
+      hold b = rx_escape_byte(p, i)
+      when b >= 0 {
+        lo = b
+        ok = 1
+      }
+      when e == 100 {
+        ok = 1
+        set_id = 1
+      }
+      when e == 68 {
+        ok = 1
+        set_id = 1
+        negset = 1
+      }
+      when e == 119 {
+        ok = 1
+        set_id = 2
+      }
+      when e == 87 {
+        ok = 1
+        set_id = 2
+        negset = 1
+      }
+      when e == 115 {
+        ok = 1
+        set_id = 3
+      }
+      when e == 83 {
+        ok = 1
+        set_id = 3
+        negset = 1
+      }
+      when e == 98 {
+        ok = 1
+        lo = 8
+      }
+    }
+    when ok == 1 {
+      hold next = i + rx_escape_len(p, i)
+      hold isset = 0
+      when set_id > 0 {
+        isset = 1
+      }
+      out = push(out, 1)
+      out = push(out, lo)
+      out = push(out, lo)
+      out = push(out, isset)
+      out = push(out, set_id)
+      out = push(out, negset)
+      out = push(out, next)
+    }
+    give out
+  }
+  out = push(out, 1)
+  out = push(out, c)
+  out = push(out, c)
+  out = push(out, 0)
+  out = push(out, 0)
+  out = push(out, 0)
+  out = push(out, i + 1)
+  give out
+}
+
+make rx_p_class(p: str, i: num, ng: num) -> list {
+  hold j = i + 1
+  hold neg = 0
+  when j < len(p) and p[j] == 94 {
+    neg = 1
+    j = j + 1
+  }
+  hold bm = rx_bitmap_empty()
+  hold first = 1
+  hold state = 0
+  while state == 0 {
+    when j >= len(p) {
+      state = 2
+    }
+    otherwise {
+      hold c = p[j]
+      when c == 93 and first == 0 {
+        state = 1
+        j = j + 1
+      }
+      otherwise {
+        when c == 91 and j + 1 < len(p) and p[j + 1] == 58 {
+          state = 2
+        }
+        when c == 93 and first == 1 {
+          bm = rx_bitmap_set(bm, 93, 93)
+          j = j + 1
+          first = 0
+        }
+        otherwise {
+          hold a = rx_class_atom(p, j)
+          when len(a) == 0 {
+            state = 2
+          }
+          otherwise {
+            j = a[6]
+            when a[3] == 1 {
+              when a[5] == 1 {
+                bm = rx_bitmap_or_not(bm, rx_bitmap_set_of(a[4]))
+              }
+              otherwise {
+                bm = rx_bitmap_or(bm, rx_bitmap_set_of(a[4]))
+              }
+            }
+            otherwise {
+              hold lo = a[1]
+              hold hi = a[2]
+              when j < len(p) and p[j] == 45 and j + 1 < len(p) and p[j + 1] != 93 {
+                hold b2 = rx_class_atom(p, j + 1)
+                when len(b2) == 0 {
+                  state = 2
+                }
+                otherwise {
+                  when b2[3] == 1 {
+                    state = 2
+                  }
+                  otherwise {
+                    when b2[1] < lo {
+                      state = 2
+                    }
+                    otherwise {
+                      hi = b2[1]
+                      j = b2[6]
+                    }
+                  }
+                }
+              }
+              when state == 0 {
+                bm = rx_bitmap_set(bm, lo, hi)
+              }
+            }
+            first = 0
+          }
+        }
+      }
+    }
+  }
+  when state != 1 {
+    give rx_fail()
+  }
+  when neg == 1 {
+    bm = rx_bitmap_negate(bm)
+  }
+  give rx_res(1, j, 0, ng, rx_class_code(bm))
+}
+
+// ---------------------------------------------------------------------------
+// Code assembly
+// ---------------------------------------------------------------------------
+
+make rx_star(code: list, lazy: num) -> list {
+  hold out = []
+  hold n = len(code)
+  when lazy == 1 {
+    out = rx_mk(rx_op_split(), n + 6, 3)
+  } otherwise {
+    out = rx_mk(rx_op_split(), 3, n + 6)
+  }
+  out = rx_join(out, code)
+  out = rx_join(out, rx_mk(rx_op_jmp(), 0 - (n + 3), 0))
+  give out
+}
+
+make rx_opt(code: list, lazy: num) -> list {
+  hold out = []
+  hold skip = len(code) + 3
+  when lazy == 1 {
+    out = rx_mk(rx_op_split(), skip, 3)
+  } otherwise {
+    out = rx_mk(rx_op_split(), 3, skip)
+  }
+  out = rx_join(out, code)
+  give out
+}
+
+make rx_alt(a: list, b: list) -> list {
+  hold out = []
+  hold la = len(a)
+  hold lb = len(b)
+  out = rx_mk(rx_op_split(), 3, la + 6)
+  out = rx_join(out, a)
+  out = rx_join(out, rx_mk(rx_op_jmp(), lb + 3, 0))
+  out = rx_join(out, b)
+  give out
+}
+
+make rx_repeat(code: list, mn: num, mx: num, lazy: num) -> list {
+  hold out = []
+  hold k = 0
+  while k < mn {
+    out = rx_join(out, code)
+    k = k + 1
+  }
+  when mx == 0 - 1 {
+    out = rx_join(out, rx_star(code, lazy))
+  } otherwise {
+    hold extra = mx - mn
+    hold tail = []
+    hold e = 0
+    while e < extra {
+      tail = rx_opt(rx_join(code, tail), lazy)
+      e = e + 1
+    }
+    out = rx_join(out, tail)
+  }
+  give out
+}
+
+make rx_quant_num(p: str, i: num) -> list {
+  hold j = i
+  hold v = 0
+  hold any = 0
+  while j < len(p) and p[j] >= 48 and p[j] <= 57 {
+    hold digit = p[j] - 48
+    v = v * 10 + digit
+    j = j + 1
+    any = 1
+  }
+  hold out = []
+  out = push(out, any)
+  out = push(out, v)
+  out = push(out, j)
+  give out
+}
+
+// [ok, min, max, next] with max = -1 for an open upper bound.
+make rx_p_quant(p: str, i: num) -> list {
+  hold no = []
+  no = push(no, 0)
+  no = push(no, 0)
+  no = push(no, 0)
+  no = push(no, i)
+  hold r1 = rx_quant_num(p, i + 1)
+  when r1[0] == 0 {
+    give no
+  }
+  hold mn = r1[1]
+  hold j = r1[2]
+  hold mx = mn
+  hold done = 0
+  when j < len(p) and p[j] == 44 {
+    j = j + 1
+    when j < len(p) and p[j] == 125 {
+      mx = 0 - 1
+      j = j + 1
+      done = 1
+    } otherwise {
+      hold r2 = rx_quant_num(p, j)
+      when r2[0] == 0 {
+        give no
+      }
+      mx = r2[1]
+      j = r2[2]
+      when j >= len(p) or p[j] != 125 {
+        give no
+      }
+      j = j + 1
+      done = 1
+    }
+  }
+  when done == 0 {
+    when j >= len(p) or p[j] != 125 {
+      give no
+    }
+    j = j + 1
+  }
+  when mx != 0 - 1 and mn > mx {
+    hold hard = []
+    hard = push(hard, 2)
+    hard = push(hard, 0)
+    hard = push(hard, 0)
+    hard = push(hard, i)
+    give hard
+  }
+  when mn > rx_max_repeat() {
+    hold hard = []
+    hard = push(hard, 2)
+    hard = push(hard, 0)
+    hard = push(hard, 0)
+    hard = push(hard, i)
+    give hard
+  }
+  when mx != 0 - 1 and mx > rx_max_repeat() {
+    hold hard = []
+    hard = push(hard, 2)
+    hard = push(hard, 0)
+    hard = push(hard, 0)
+    hard = push(hard, i)
+    give hard
+  }
+  hold ok = []
+  ok = push(ok, 1)
+  ok = push(ok, mn)
+  ok = push(ok, mx)
+  ok = push(ok, j)
+  give ok
+}
+
+// ---------------------------------------------------------------------------
+// Atoms, concatenation, alternation
+// ---------------------------------------------------------------------------
+
+make rx_p_atom(p: str, i: num, ng: num) -> list {
+  hold bad = rx_fail()
+  when i >= len(p) {
+    give bad
+  }
+  hold c = p[i]
+  when c == 40 {
+    hold j = i + 1
+    hold cap = 1
+    when j + 1 < len(p) and p[j] == 63 and p[j + 1] == 58 {
+      cap = 0
+      j = j + 2
+    }
+    hold inner = ng
+    hold slot = 0
+    when cap == 1 {
+      slot = 2 * (ng + 1)
+      inner = ng + 1
+    }
+    when inner > rx_max_groups() {
+      give bad
+    }
+    hold r = rx_p_alt(p, j, inner)
+    when rx_r_ok(r) == 0 {
+      give bad
+    }
+    hold after = rx_r_pos(r)
+    when after >= len(p) or p[after] != 41 {
+      give bad
+    }
+    hold code = rx_r_code(r)
+    when cap == 1 {
+      code = rx_join(rx_mk(rx_op_save(), slot, 0), code)
+      code = rx_join(code, rx_mk(rx_op_save(), slot + 1, 0))
+    }
+    give rx_res(1, rx_r_pos(r) + 1, rx_r_null(r), rx_r_ng(r), code)
+  }
+  when c == 91 {
+    give rx_p_class(p, i, ng)
+  }
+  when c == 46 {
+    give rx_res(1, i + 1, 0, ng, rx_mk(rx_op_any(), 0, 0))
+  }
+  when c == 94 {
+    give rx_res(1, i + 1, 1, ng, rx_mk(rx_op_bol(), 0, 0))
+  }
+  when c == 36 {
+    give rx_res(1, i + 1, 1, ng, rx_mk(rx_op_eol(), 0, 0))
+  }
+  when c == 92 {
+    give rx_p_escape(p, i, ng)
+  }
+  when c == 41 or c == 124 or c == 42 or c == 43 or c == 63 {
+    give bad
+  }
+  give rx_res(1, i + 1, 0, ng, rx_mk(rx_op_lit(), c, 0))
+}
+
+make rx_p_rep(p: str, i: num, ng: num) -> list {
+  hold a = rx_p_atom(p, i, ng)
+  when rx_r_ok(a) == 0 {
+    give a
+  }
+  hold code = rx_r_code(a)
+  hold pos = rx_r_pos(a)
+  hold nul = rx_r_null(a)
+  hold g = rx_r_ng(a)
+  hold have = 0
+  hold mn = 0
+  hold mx = 0
+  hold next = pos
+  when pos < len(p) {
+    hold c = p[pos]
+    when c == 42 {
+      mn = 0
+      mx = 0 - 1
+      have = 1
+      next = pos + 1
+    }
+    when c == 43 {
+      mn = 1
+      mx = 0 - 1
+      have = 1
+      next = pos + 1
+    }
+    when c == 63 {
+      mn = 0
+      mx = 1
+      have = 1
+      next = pos + 1
+    }
+    when c == 123 {
+      hold q = rx_p_quant(p, pos)
+      when q[0] == 2 {
+        give rx_fail()
+      }
+      when q[0] == 1 {
+        mn = q[1]
+        mx = q[2]
+        have = 1
+        next = q[3]
+      }
+    }
+  }
+  when have == 1 {
+    hold lazy = 0
+    when next < len(p) and p[next] == 63 {
+      lazy = 1
+      next = next + 1
+    }
+    when nul == 1 and (mx == 0 - 1 or mx > 1) {
+      give rx_fail()
+    }
+    code = rx_repeat(code, mn, mx, lazy)
+    pos = next
+    when mn == 0 {
+      nul = 1
+    }
+  }
+  give rx_res(1, pos, nul, g, code)
+}
+
+make rx_p_cat(p: str, i: num, ng: num) -> list {
+  hold code = []
+  hold nul = 1
+  hold g = ng
+  hold pos = i
+  hold more = 1
+  while more == 1 {
+    when pos >= len(p) {
+      more = 0
+    }
+    when pos < len(p) and p[pos] == 124 {
+      more = 0
+    }
+    when pos < len(p) and p[pos] == 41 {
+      more = 0
+    }
+    when more == 1 {
+      hold r = rx_p_rep(p, pos, g)
+      when rx_r_ok(r) == 0 {
+        give rx_fail()
+      }
+      code = rx_join(code, rx_r_code(r))
+      when rx_r_null(r) == 0 {
+        nul = 0
+      }
+      g = rx_r_ng(r)
+      pos = rx_r_pos(r)
+    }
+  }
+  give rx_res(1, pos, nul, g, code)
+}
+
+make rx_p_alt(p: str, i: num, ng: num) -> list {
+  hold r = rx_p_cat(p, i, ng)
+  when rx_r_ok(r) == 0 {
+    give r
+  }
+  hold code = rx_r_code(r)
+  hold nul = rx_r_null(r)
+  hold g = rx_r_ng(r)
+  hold pos = rx_r_pos(r)
+  hold more = 1
+  while more == 1 {
+    when pos >= len(p) {
+      more = 0
+    }
+    when pos < len(p) and p[pos] != 124 {
+      more = 0
+    }
+    when more == 1 {
+      hold b = rx_p_cat(p, pos + 1, g)
+      when rx_r_ok(b) == 0 {
+        give rx_fail()
+      }
+      code = rx_alt(code, rx_r_code(b))
+      when rx_r_null(b) == 1 {
+        nul = 1
+      }
+      g = rx_r_ng(b)
+      pos = rx_r_pos(b)
+    }
+  }
+  give rx_res(1, pos, nul, g, code)
+}
+
+// [1, groups, ...code] or [0] when the pattern is refused.
+make rx_compile(p: str) -> list {
+  give rx_compile_mode(p, 0)
+}
+
+// full = 1 appends \Z before the closing save, which is how fullmatch forces
+// backtracking until the match covers the whole subject.
+make rx_compile_mode(p: str, full: num) -> list {
+  hold no = []
+  no = push(no, 0)
+  when len(p) > rx_max_pattern() {
+    give no
+  }
+  hold r = rx_p_alt(p, 0, 0)
+  when rx_r_ok(r) == 0 {
+    give no
+  }
+  when rx_r_pos(r) != len(p) {
+    give no
+  }
+  hold code = rx_mk(rx_op_save(), 0, 0)
+  code = rx_join(code, rx_r_code(r))
+  when full == 1 {
+    code = rx_join(code, rx_mk(rx_op_eos(), 0, 0))
+  }
+  code = rx_join(code, rx_mk(rx_op_save(), 1, 0))
+  code = rx_join(code, rx_mk(rx_op_match(), 0, 0))
+  hold out = []
+  out = push(out, 1)
+  out = push(out, rx_r_ng(r))
+  out = rx_join(out, code)
+  give out
+}
+
+make rx_valid(p: str) -> num {
+  hold c = rx_compile(p)
+  give c[0]
+}
+
+// ---------------------------------------------------------------------------
+// The matcher: a backtracking VM over the code words
+// ---------------------------------------------------------------------------
+
+make rx_is_word_byte(b: num) -> num {
+  when b >= 48 and b <= 57 {
+    give 1
+  }
+  when b >= 65 and b <= 90 {
+    give 1
+  }
+  when b >= 97 and b <= 122 {
+    give 1
+  }
+  when b == 95 {
+    give 1
+  }
+  give 0
+}
+
+make rx_word_at(s: str, pos: num) -> num {
+  when pos < 0 or pos >= len(s) {
+    give 0
+  }
+  give rx_is_word_byte(s[pos])
+}
+
+// Append a copy of the live capture vector with one slot replaced.
+make rx_save(arena: list, gidx: num, g: num, slot: num, pos: num) -> list {
+  hold out = arena
+  hold k = 0
+  while k < g {
+    hold v = arena[gidx + k]
+    when k == slot {
+      v = pos
+    }
+    out = push(out, v)
+    k = k + 1
+  }
+  give out
+}
+
+// [1, end, ...captures] on a match, [0] when there is none, [-1] when the step
+// budget ran out before the answer was known.
+make rx_run(code: list, s: str, start: num, g: num, noempty: num) -> list {
+  hold arena = rx_neg_ones(g)
+  hold gidx = 0
+  hold stack = []
+  hold pc = 0
+  hold pos = start
+  hold steps = 0
+  hold budget = rx_budget()
+  hold n = len(s)
+  hold running = 1
+  hold result = []
+  result = push(result, 0)
+  while running == 1 {
+    steps = steps + 1
+    when steps > budget {
+      hold over = []
+      over = push(over, 0 - 1)
+      result = over
+      running = 0
+    }
+    otherwise {
+      hold op = code[pc]
+      hold st = 0
+      when op == 0 {
+        when noempty == 1 and pos == start {
+          st = 0
+        }
+        otherwise {
+          hold vec = rx_lslice(arena, gidx, gidx + g)
+          vec = rx_front2(vec, pos)
+          vec = rx_front2(vec, 1)
+          result = vec
+          running = 0
+          st = 2
+        }
+      }
+      when op == 1 {
+        when pos < n and s[pos] == code[pc + 1] {
+          pc = pc + 3
+          pos = pos + 1
+          st = 1
+        }
+      }
+      when op == 2 {
+        when pos < n and s[pos] != 10 {
+          pc = pc + 3
+          pos = pos + 1
+          st = 1
+        }
+      }
+      when op == 3 {
+        when pos < n and code[pc + 3 + s[pos]] == 1 {
+          pc = pc + rx_class_words()
+          pos = pos + 1
+          st = 1
+        }
+      }
+      when op == 4 {
+        stack = push(push(push(stack, pc + code[pc + 2]), pos), gidx)
+        pc = pc + code[pc + 1]
+        st = 1
+      }
+      when op == 5 {
+        pc = pc + code[pc + 1]
+        st = 1
+      }
+      when op == 6 {
+        hold base = len(arena)
+        arena = rx_save(arena, gidx, g, code[pc + 1], pos)
+        gidx = base
+        pc = pc + 3
+        st = 1
+      }
+      when op == 7 {
+        when pos == 0 {
+          pc = pc + 3
+          st = 1
+        }
+      }
+      when op == 8 {
+        hold at_end = 0
+        when pos == n {
+          at_end = 1
+        }
+        when pos == (n - 1) and n > 0 and s[pos] == 10 {
+          at_end = 1
+        }
+        when at_end == 1 {
+          pc = pc + 3
+          st = 1
+        }
+      }
+      when op == 9 {
+        when pos == n {
+          pc = pc + 3
+          st = 1
+        }
+      }
+      when op == 10 {
+        hold before10 = rx_word_at(s, pos - 1)
+        hold after10 = rx_word_at(s, pos)
+        when before10 != after10 {
+          pc = pc + 3
+          st = 1
+        }
+      }
+      when op == 11 {
+        hold before11 = rx_word_at(s, pos - 1)
+        hold after11 = rx_word_at(s, pos)
+        when before11 == after11 {
+          pc = pc + 3
+          st = 1
+        }
+      }
+      when st == 0 {
+        when len(stack) < 3 {
+          hold none = []
+          none = push(none, 0)
+          result = none
+          running = 0
+        }
+        otherwise {
+          hold sn = len(stack)
+          pc = stack[sn - 3]
+          pos = stack[sn - 2]
+          gidx = stack[sn - 1]
+          stack = rx_lslice(stack, 0, sn - 3)
+        }
+      }
+    }
+  }
+  give result
+}
+
+// Try an anchored match at every offset from `from`, so a match can begin
+// anywhere. [1, start, end, captures...] / [0] / [-1].
+make rx_scan(code: list, s: str, from: num, g: num, noempty: num) -> list {
+  hold i = from
+  hold flag = noempty
+  hold result = []
+  result = push(result, 0)
+  hold running = 1
+  while running == 1 {
+    hold r = rx_run(code, s, i, g, flag)
+    flag = 0
+    when r[0] == 0 - 1 {
+      hold over = []
+      over = push(over, 0 - 1)
+      result = over
+      running = 0
+    }
+    when r[0] == 1 {
+      hold hit = []
+      hit = push(hit, 1)
+      hit = push(hit, i)
+      hit = rx_join(hit, rx_lslice(r, 1, len(r)))
+      result = hit
+      running = 0
+    }
+    when r[0] == 0 {
+      when i >= len(s) {
+        running = 0
+      }
+      otherwise {
+        i = i + 1
+      }
+    }
+  }
+  give result
+}
+
+make rx_bad_find() -> list {
+  hold out = []
+  out = push(out, 0 - 1)
+  give out
+}
+
+// [1, start, end, captures...] / [0] no match / [-1] refused or out of budget.
+make rx_find_from(p: str, s: str, start: num) -> list {
+  when len(s) > rx_max_input() {
+    give rx_bad_find()
+  }
+  hold c = rx_compile(p)
+  when c[0] == 0 {
+    give rx_bad_find()
+  }
+  hold code = rx_lslice(c, 2, len(c))
+  hold from = start
+  when from < 0 {
+    from = 0
+  }
+  hold ng = c[1]
+  hold g = 2 * ng + 2
+  give rx_scan(code, s, from, g, 0)
+}
+
+make rx_find(p: str, s: str) -> list {
+  give rx_find_from(p, s, 0)
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+// Anchored at offset 0 (`re.match`), returning the capture vector.
+make rx_match_vec(p: str, s: str) -> list {
+  when len(s) > rx_max_input() {
+    give rx_bad_find()
+  }
+  hold c = rx_compile(p)
+  when c[0] == 0 {
+    give rx_bad_find()
+  }
+  hold code = rx_lslice(c, 2, len(c))
+  hold ng = c[1]
+  hold g = 2 * ng + 2
+  hold r = rx_run(code, s, 0, g, 0)
+  when r[0] == 1 {
+    hold out = []
+    out = push(out, 1)
+    out = push(out, 0)
+    out = rx_join(out, rx_lslice(r, 1, len(r)))
+    give out
+  }
+  give r
+}
+
+make rx_match(p: str, s: str) -> num {
+  hold r = rx_match_vec(p, s)
+  when r[0] == 1 {
+    give 1
+  }
+  give 0
+}
+
+// Anchored and required to cover the whole subject (`re.fullmatch`).
+make rx_full(p: str, s: str) -> num {
+  when len(s) > rx_max_input() {
+    give 0
+  }
+  hold c = rx_compile_mode(p, 1)
+  when c[0] == 0 {
+    give 0
+  }
+  hold code = rx_lslice(c, 2, len(c))
+  hold ng = c[1]
+  hold g = 2 * ng + 2
+  hold r = rx_run(code, s, 0, g, 0)
+  when r[0] == 1 {
+    give 1
+  }
+  give 0
+}
+
+make rx_search(p: str, s: str) -> num {
+  hold r = rx_find(p, s)
+  when r[0] == 1 {
+    give 1
+  }
+  give 0
+}
+
+// [start, end] of the first match; [] when there is none or it was refused.
+make rx_span(p: str, s: str) -> list {
+  hold r = rx_find(p, s)
+  hold out = []
+  when r[0] == 1 {
+    out = push(out, r[1])
+    out = push(out, r[2])
+  }
+  give out
+}
+
+// [g0s, g0e, g1s, g1e, ...] with -1/-1 for a group that did not participate.
+make rx_groups(p: str, s: str) -> list {
+  hold r = rx_find(p, s)
+  hold out = []
+  when r[0] == 1 {
+    out = rx_lslice(r, 3, len(r))
+  }
+  give out
+}
+
+make rx_text(p: str, s: str) -> str {
+  hold r = rx_find(p, s)
+  when r[0] == 1 {
+    give rx_slice_s(s, r[1], r[2])
+  }
+  give ""
+}
+
+make rx_group(p: str, s: str, k: num) -> str {
+  hold r = rx_find(p, s)
+  when r[0] == 1 {
+    hold at = 3 + 2 * k
+    when at + 1 < len(r) {
+      hold a = r[at]
+      hold b = r[at + 1]
+      when a >= 0 and b >= a {
+        give rx_slice_s(s, a, b)
+      }
+    }
+  }
+  give ""
+}
+
+// Flat [s0, e0, s1, e1, ...] over non-overlapping matches. An empty match
+// advances one byte, the rule Python's finditer uses. At most
+// rx_max_matches() pairs are reported.
+make rx_find_all(p: str, s: str) -> list {
+  hold out = []
+  when len(s) > rx_max_input() {
+    give out
+  }
+  hold c = rx_compile(p)
+  when c[0] == 0 {
+    give out
+  }
+  hold code = rx_lslice(c, 2, len(c))
+  hold ng = c[1]
+  hold g = 2 * ng + 2
+  hold from = 0
+  // After an empty match the search resumes at the same offset but an empty
+  // match there is refused, so a non-empty one can start where the empty one
+  // did. That is the rule Python's finditer has used since 3.7.
+  hold flag = 0
+  hold more = 1
+  while more == 1 {
+    hold r = rx_scan(code, s, from, g, flag)
+    when r[0] != 1 {
+      more = 0
+    }
+    when r[0] == 1 {
+      out = push(out, r[1])
+      out = push(out, r[2])
+      when rx_idiv(len(out), 2) >= rx_max_matches() {
+        more = 0
+      }
+      when more == 1 {
+        when r[2] == r[1] {
+          from = r[1]
+          flag = 1
+        }
+        otherwise {
+          from = r[2]
+          flag = 0
+        }
+      }
+    }
+  }
+  give out
+}
+
+make rx_count(p: str, s: str) -> num {
+  hold xs = rx_find_all(p, s)
+  give rx_idiv(len(xs), 2)
+}
+
+// Expand `&` (whole match), `\1`..`\9` (groups), `\\` and `\x` in a replacement.
+make rx_expand(repl: str, s: str, gv: list) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(repl) {
+    hold c = repl[i]
+    when c == 92 and i + 1 < len(repl) {
+      hold d = repl[i + 1]
+      when d >= 48 and d <= 57 {
+        hold at = (d - 48) * 2
+        when at + 1 < len(gv) {
+          hold ga = gv[at]
+          hold gb = gv[at + 1]
+          when ga >= 0 and gb >= ga {
+            out = concat(out, rx_slice_s(s, ga, gb))
+          }
+        }
+      }
+      otherwise {
+        out = concat(out, chr(d))
+      }
+      i = i + 2
+    }
+    otherwise {
+      when c == 38 {
+        hold wa = gv[0]
+        hold wb = gv[1]
+        when wa >= 0 and wb >= wa {
+          out = concat(out, rx_slice_s(s, wa, wb))
+        }
+      }
+      otherwise {
+        out = concat(out, chr(c))
+      }
+      i = i + 1
+    }
+  }
+  give out
+}
+
+make rx_replace_first(p: str, s: str, repl: str) -> str {
+  hold r = rx_find(p, s)
+  when r[0] != 1 {
+    give s
+  }
+  hold out = rx_slice_s(s, 0, r[1])
+  out = concat(out, rx_expand(repl, s, rx_lslice(r, 3, len(r))))
+  out = concat(out, rx_slice_s(s, r[2], len(s)))
+  give out
+}
+
+make rx_replace(p: str, s: str, repl: str) -> str {
+  when len(s) > rx_max_input() {
+    give s
+  }
+  hold c = rx_compile(p)
+  when c[0] == 0 {
+    give s
+  }
+  hold code = rx_lslice(c, 2, len(c))
+  hold ng = c[1]
+  hold g = 2 * ng + 2
+  hold out = ""
+  hold from = 0
+  hold flag = 0
+  hold count = 0
+  hold more = 1
+  while more == 1 {
+    hold r = rx_scan(code, s, from, g, flag)
+    when r[0] != 1 {
+      out = concat(out, rx_slice_s(s, from, len(s)))
+      more = 0
+    }
+    when r[0] == 1 {
+      hold st = r[1]
+      hold en = r[2]
+      out = concat(out, rx_slice_s(s, from, st))
+      out = concat(out, rx_expand(repl, s, rx_lslice(r, 3, len(r))))
+      count = count + 1
+      when len(out) > rx_max_output() {
+        out = rx_slice_s(out, 0, rx_max_output())
+        more = 0
+      }
+      when more == 1 {
+        when en == st {
+          from = st
+          flag = 1
+        }
+        otherwise {
+          from = en
+          flag = 0
+        }
+        when count >= rx_max_matches() {
+          out = concat(out, rx_slice_s(s, from, len(s)))
+          more = 0
+        }
+      }
+    }
+  }
+  give out
+}
+
+make rx_hex_digit(v: num) -> str {
+  when v < 10 {
+    give chr(48 + v)
+  }
+  give chr(87 + v)
+}
+
+// Escape every metacharacter and control byte so the result matches literally.
+make rx_escape(s: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(s) {
+    hold b = s[i]
+    hold meta = 0
+    when b == 92 or b == 94 or b == 36 or b == 46 or b == 124 {
+      meta = 1
+    }
+    when b == 63 or b == 42 or b == 43 or b == 40 or b == 41 {
+      meta = 1
+    }
+    when b == 91 or b == 93 or b == 123 or b == 125 {
+      meta = 1
+    }
+    hold rep = ""
+    when b == 10 {
+      rep = concat(chr(92), "n")
+    }
+    when b == 13 {
+      rep = concat(chr(92), "r")
+    }
+    when b == 9 {
+      rep = concat(chr(92), "t")
+    }
+    when len(rep) == 0 {
+      when meta == 1 or b < 32 or b == 127 {
+        rep = chr(92)
+      }
+      when b < 32 or b == 127 {
+        rep = concat(rep, "x")
+        rep = concat(rep, rx_hex_digit(rx_idiv(b - (b % 16), 16)))
+        rep = concat(rep, rx_hex_digit(b % 16))
+      }
+      otherwise {
+        rep = concat(rep, chr(b))
+      }
+    }
+    out = concat(out, rep)
+    i = i + 1
+  }
+  give out
+}
