@@ -164,6 +164,20 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   `refuse/list_index_past_end.sa`, so the refusal matrix stays 64. Structs, FP
   expressions and file APIs are still open.
 
+- **Numeric list literals inside `make` bodies** (2026-11-17, step 16): the
+  step-15 slice is no longer top-level only. A body list reserves its words in
+  the frame, growing *downward* from the slot the name path hands out (a frame
+  local lives below the frame base), and each element is stored at run time with
+  the ordinary `push immediate` + `store variable` pair, so no new encoder is
+  involved; a read is one variable load at `slot - 4*index` and `len(xs)` stays
+  the compile-time count. Two lists in one body share the frame, a recursive
+  body can compare against its own list, and a top-level list in the same
+  program keeps the data-segment layout. The new `list_body` fixture covers
+  those forms and agrees on the six execution paths (i386 8244 bytes, reviewed
+  AArch64/RV64IM goldens, arch-neutral data image, output equal to the x86-64
+  native AOT lane); every pre-existing fixture keeps its exact size and golden,
+  and the refusal matrix stays 64.
+
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
@@ -308,8 +322,10 @@ Numeric **list literals** are supported in a bounded form:
 literal>]` is one variable load at base + 4*index, and `len(xs)` is the
 compile-time element count. Elements are integer literals only, the index must
 be an integer literal (a runtime index is refused), an index at or past the end
-is refused, an empty list is refused, and a list literal inside a `make` body is
-refused. The language has no element assignment, so nothing has to be mutable
+is refused, and an empty list is refused. A list literal also works inside a
+`make` body: the elements live below the frame base, grow downward from the
+reserved word and are stored at run time, so a body list costs one frame word
+per element against the same 60-word budget. The language has no element assignment, so nothing has to be mutable
 and the declaration emits no code at all. Structs, floating-point expressions,
 general file APIs, and garbage collection remain unsupported by this compiler;
 recursion

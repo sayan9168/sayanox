@@ -3933,7 +3933,13 @@ make emit_expression(extext: str) -> num {
             when elem_idx >= elem_n {
               hold oob_list = fail(1, concat(concat("line ", numstr(lineno)), concat(concat(": list index ", numstr(elem_idx)), " is past the end of the list")))
             }
-            code = emit_load_var(code, arch, slot_of(names, vname) + 4 * elem_idx)
+            hold eslot = slot_of(names, vname)
+            when fn_active >= 0 {
+              eslot = eslot - 4 * elem_idx
+            } otherwise {
+              eslot = eslot + 4 * elem_idx
+            }
+            code = emit_load_var(code, arch, eslot)
             want = 0
             k = k + 3
             list_handled = 1
@@ -4450,9 +4456,6 @@ make emit_statements() -> num {
         // A read with a literal index is one variable load at base + 4*index,
         // and len(xs) is a constant.
         when act == 0 && len(extext) > 0 && sx_index(extext, 0) == 91 {
-          when fn_active >= 0 {
-            hold list_in_body = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal inside a make body is not supported yet"))
-          }
           when sx_index(extext, len(extext) - 1) != 93 {
             hold bad_list_close = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal must end with ']' and hold integer literals"))
           }
@@ -4479,15 +4482,33 @@ make emit_statements() -> num {
           // The generic name path above reserved the first element's word, so
           // the list grows by (elements - 1) more words and is filled in place.
           hold lslot = slot
-          when lel > 1 {
-            data = put_zeros(data, 4 * (lel - 1))
+          // A body local lives below the frame base, so its extra elements grow
+          // downward from the slot the generic name path reserved, and they have
+          // to be stored at run time; at top level the words grow upward in the
+          // data segment and are filled in place, so nothing is emitted.
+          when fn_active >= 0 {
+            fn_frame_words[fn_active] = fn_frame_words[fn_active] + (lel - 1)
+            when fn_frame_words[fn_active] > 60 {
+              hold big_list_frame = fail(1, concat(concat("line ", numstr(lineno)), ": a make body keeps at most 60 words of locals in a frame"))
+            }
+          } otherwise {
+            when lel > 1 {
+              data = put_zeros(data, 4 * (lel - 1))
+            }
           }
           hold lk = 0
           li = 0
           while li < ln {
             hold lj2 = li
             while lj2 < ln && sx_index(lb, lj2) != 44 { lj2 = lj2 + 1 }
-            data = set_u32(data, lslot + 4 * lk, tok_num(concat("n", trim(sub(lb, li, lj2)))))
+            hold lelv = tok_num(concat("n", trim(sub(lb, li, lj2))))
+            when fn_active >= 0 {
+              code = emit_push_imm2(code, arch, lelv)
+              code = emit_pop_acc(code, arch)
+              code = emit_store_var(code, arch, lslot - 4 * lk)
+            } otherwise {
+              data = set_u32(data, lslot + 4 * lk, lelv)
+            }
             lk = lk + 1
             li = lj2 + 1
           }
