@@ -61,9 +61,12 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   `concat` is also accepted directly inside `len(concat(...))` in numeric
   expressions, using the same heap and operand limits. Calls to user functions
   inside those concat operands are refused to avoid clobbering shared scratch
-  pairs during recursion. Other expression positions, including `string_eq`
-  arguments, remain refused, and embedded-NUL literals remain refused
-  because the existing backends disagree on their output semantics.
+  pairs during recursion. `string_eq` arguments are no longer limited to a
+  variable, a literal or a `chr(...)` value: a whole `concat(...)` or a whole
+  `-> str` call is accepted there too (see *String equality over string
+  expressions* below). Remaining expression positions are still refused, and
+  embedded-NUL literals remain refused because the existing backends disagree
+  on their output semantics.
 - **General string expressions** (2026-11-02): `show concat(A, B)` prints a
   concatenation without naming a variable, and a `concat` operand may itself be
   a `concat(...)` call, so `concat(concat(a, "-"), b)`,
@@ -91,6 +94,40 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   between numeric and string values", and an undeclared source is refused as an
   unknown name. Arbitrary string expressions are still not sources: only a
   literal, `concat(...)`, or another string variable.
+- **String equality over string expressions** (2026-11-17): a `string_eq`
+  argument is no longer just one token. The emitter finds the matching `)` of an
+  argument that opens a multi-token string expression and accepts
+  `concat(<operand>, <operand>)` and a `-> str` call in either position, in
+  addition to the existing `chr(<expr>)` form, so
+  `string_eq(concat(a, c), "alphabeta")`,
+  `string_eq("alphabeta", concat(a, c))`,
+  `string_eq(concat(a, c), concat("alpha", "beta"))`,
+  `string_eq(concat(concat(a, "-"), c), "alpha-beta")`,
+  `string_eq(concat(chr(65), "lpha"), "Alpha")` and
+  `string_eq(wrap(a), "[alpha")` all compile and answer 0 or 1. A `concat`
+  argument materializes its pair in the data segment (the same
+  `(pointer, length)` push the `chr` path uses), so nested `concat`, `chr`
+  operands and empty operands keep one argument shape, and a `-> str` call
+  reuses its result pair. An argument that is a plain literal is pooled by the
+  ordinal counted from the expression text, so a literal *after* an argument
+  that carries literals of its own (`string_eq(concat(a, "x"), "abx")`) still
+  indexes the right literal. The new `streq_expr` fixture covers these forms on
+  the six execution paths (i386 8664 bytes, reviewed AArch64/RV64IM goldens,
+  output compared against the x86-64 native AOT lane). The refusal matrix
+  stays 64: `refuse/concat_streq_arg.sa` (a `concat` inside `string_eq`) became
+  a legal program and was deleted, its form moved into `streq_expr`, and
+  `refuse/streq_in_body.sa` was added.
+
+  The same increment fixed a **silent miscompile**: a `string_eq` inside a
+  `make` body emitted its argument pushes and left the call site unpatched — the
+  shared comparison routine is placed after the main program, but the bodies are
+  emitted after it and the call sites are patched when the routine is placed —
+  so a body comparison printed the two operand lengths instead of 0 or 1. No
+  fixture used that form, which is why the suite stayed green. It is now refused
+  with a line-numbered diagnostic (`refuse/streq_in_body.sa` is the negative
+  control on all three targets) until the bodies are emitted before the routine;
+  a body can still compare a value after returning.
+
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
@@ -230,6 +267,12 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   call, a `-> str` result assigned to a numeric variable, a num-returning call as
   a `concat` operand, and any parameter or result type other than `num`/`str`.
 
+A `string_eq` inside a `make` body is refused: the comparison routine is
+placed after the main program and its call sites are patched there, while the
+bodies are emitted later, so a body comparison cannot be linked yet (it used to
+run with an unpatched call and print the operand lengths). Compare the value
+after the body returns.
+
 Lists, structs, floating-point expressions, general
 file APIs, and garbage collection remain unsupported by this compiler; recursion
 is supported but capped at 64 live frames, so an unbounded recurrence is a
@@ -237,10 +280,11 @@ runtime exit, not a compile-time guarantee. `chr` is accepted as
 a whole string value and as one whole argument of `concat`, `string_eq` and
 `len`, and nowhere else: an argument that is more than an integer literal or a
 numeric variable (`chr(n + 1)`, a signed literal such as `chr(-1)`, `chr("A")`,
-`chr(nope)`) is refused in both positions, and `string_eq` arguments remain a
-variable, a literal or a `chr(...)` value rather than arbitrary string
-expressions, so `concat(chr(65), concat("a", "b"))` is still refused. Holding
-the value first (`hold c = chr(65)`) remains the way to use it anywhere else.
+`chr(nope)`) is refused in both positions, and a `string_eq` argument may be a
+variable, a literal, `chr(...)`, a `concat(...)` or a `-> str` call, but not an
+arbitrary string expression. Holding the value first (`hold c = chr(65)`)
+remains the way to use it anywhere else. `string_eq` inside a `make` body is
+refused (see the limits list) instead of being miscompiled.
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
@@ -301,7 +345,7 @@ byte-identical across i386, AArch64 and RV64IM for a program with `concat`
 `string_eq(chr(65), n)` with a numeric second argument, and `len(chr(t))` with a
 string argument. The `concat_expr` increment raised it further to 36: a numeric
 variable as a `concat` operand, a numeric literal operand, a one-argument
-`concat`, eight-level nesting, and `concat(...)` used inside `string_eq`. The
+`concat`, eight-level nesting, and `concat(...)` used inside `string_eq` (that last one became a legal program in the *string equality over string expressions* step and its fixture, `refuse/concat_streq_arg.sa`, was deleted). The
 `chr`-of-expression increment took the matrix to 39: `refuse/chr_expression.sa`
 (`chr(n + 1)`) was deleted because that program is now accepted, and four
 refusals were added — a string variable in the `chr` expression, an unknown

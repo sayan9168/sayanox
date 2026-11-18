@@ -1,3 +1,0 @@
-hold a = "x"
-hold e = string_eq(concat(a, a), a)
-show e
