@@ -18,7 +18,8 @@
 // What it is NOT. This is still a bounded AOT subset, not the complete
 // Sayanox runtime. It supports static strings, len, byte indexing, a bounded
 // bump-heap concat, and functions with per-depth call frames whose parameters
-// and results may be numbers or strings; it has no lists, structs, collector,
+// and results may be numbers or strings; numeric list literals are bounded to
+// fixed words with literal indices (below), and it has no structs, collector,
 // general file API, or floating-point expression code. Unsupported forms are
 // refused with a diagnostic and non-zero exit.
 //
@@ -548,6 +549,10 @@ hold chr_acc_slot = 0 - 1
 hold arch = 0
 hold lineno = 0
 hold eq_used = 0
+// Numeric list literals: `name` -> element count, in the same "name=value|"
+// encoding as `names`. The elements themselves live in the data segment at the
+// slot recorded in `names`, so a read is one variable load.
+hold listnames = "" 
 // Where the shared string_eq routine landed, and whether it still has to be
 // placed after the `make` bodies (a body may be the only place that compares).
 hold eq_routine_at = 0
@@ -3900,6 +3905,43 @@ make emit_expression(extext: str) -> num {
           hold twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
         }
         hold vname = sub(t, 1, len(t))
+        // len(<list>) is the compile-time element count.
+        hold list_handled = 0
+        when string_eq(vname, "len") == 1 && k + 3 < tn {
+          when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), ")") == 1 {
+            hold list_len_tok = tok_at(toks, k + 2)
+            when sx_index(list_len_tok, 0) == 118 {
+              hold list_len_name = sub(list_len_tok, 1, len(list_len_tok))
+              hold list_len_n = slot_of(listnames, list_len_name)
+              when list_len_n > 0 {
+                code = emit_push_imm2(code, arch, list_len_n)
+                want = 0
+                k = k + 3
+                list_handled = 1
+              }
+            }
+          }
+        }
+        // NAME[<integer literal>]: an element of a numeric list literal.
+        when list_handled == 0 && slot_of(listnames, vname) > 0 {
+          hold elem_n = slot_of(listnames, vname)
+          when k + 3 < tn && string_eq(tok_at(toks, k + 1), "[") == 1 {
+            when string_eq(tok_at(toks, k + 3), "]") == 0 || sx_index(tok_at(toks, k + 2), 0) != 110 {
+              hold dyn_list = fail(1, concat(concat("line ", numstr(lineno)), ": a list index must be an integer literal in native32 (a list is a fixed set of words)"))
+            }
+            hold elem_idx = tok_num(concat("n", sub(tok_at(toks, k + 2), 1, len(tok_at(toks, k + 2)))))
+            when elem_idx >= elem_n {
+              hold oob_list = fail(1, concat(concat("line ", numstr(lineno)), concat(concat(": list index ", numstr(elem_idx)), " is past the end of the list")))
+            }
+            code = emit_load_var(code, arch, slot_of(names, vname) + 4 * elem_idx)
+            want = 0
+            k = k + 3
+            list_handled = 1
+          }
+          when k + 3 >= tn && list_handled == 0 {
+            hold whole_list = fail(1, concat(concat("line ", numstr(lineno)), ": a whole list is not a value in native32 (index it, or take len(...))"))
+          }
+        }
         hold is_len_call = 0
         when string_eq(vname, "len") == 1 && k + 3 < tn {
           when string_eq(tok_at(toks, k + 1), "(") == 1 && string_eq(tok_at(toks, k + 3), ")") == 1 {
@@ -4014,7 +4056,7 @@ make emit_expression(extext: str) -> num {
             hold bad_len_shape = fail(1, concat(concat("line ", numstr(lineno)), ": len() expects a string variable, string literal, chr(...), concat(...) or a `-> str` call"))
           }
         }
-        when is_len_call == 1 {
+        when is_len_call == 1 && list_handled == 0 {
           hold argtok = tok_at(toks, k + 2)
           when sx_index(argtok, 0) == 108 {
             code = emit_push_imm2(code, arch, tok_num(argtok))
@@ -4035,7 +4077,7 @@ make emit_expression(extext: str) -> num {
           want = 0
           k = k + 3
         }
-        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && is_call_len == 0 {
+        when is_len_call == 0 && is_chr_len == 0 && is_concat_len == 0 && is_call_len == 0 && list_handled == 0 {
           hold vslot = slot_of(names, vname)
           when vslot < 0 {
             hold unknown = fail(1, concat(concat(concat("line ", numstr(lineno)), ": unknown name '"), concat(vname, "'")))
@@ -4401,6 +4443,59 @@ make emit_statements() -> num {
         when ischr_hold == 1 {
           chr_has = 1
           act = 13
+        }
+        // A numeric list literal: `hold xs = [7, 8, 9]`. The language has no
+        // element assignment, so every element can be written into the data
+        // segment at compile time and the declaration emits no code at all.
+        // A read with a literal index is one variable load at base + 4*index,
+        // and len(xs) is a constant.
+        when act == 0 && len(extext) > 0 && sx_index(extext, 0) == 91 {
+          when fn_active >= 0 {
+            hold list_in_body = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal inside a make body is not supported yet"))
+          }
+          when sx_index(extext, len(extext) - 1) != 93 {
+            hold bad_list_close = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal must end with ']' and hold integer literals"))
+          }
+          hold lb = sub(extext, 1, len(extext) - 1)
+          hold ln = len(lb)
+          hold lel = 0
+          hold li = 0
+          while li < ln {
+            hold lj = li
+            while lj < ln && sx_index(lb, lj) != 44 { lj = lj + 1 }
+            hold piece = trim(sub(lb, li, lj))
+            when all_digits(piece) == 0 {
+              hold bad_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal takes integer literals only in native32"))
+            }
+            when tok_num(concat("n", piece)) > 2147483647 {
+              hold big_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list element of 2^31 or more"))
+            }
+            lel = lel + 1
+            li = lj + 1
+          }
+          when lel == 0 {
+            hold empty_list = fail(1, concat(concat("line ", numstr(lineno)), ": an empty list literal is not supported in native32"))
+          }
+          // The generic name path above reserved the first element's word, so
+          // the list grows by (elements - 1) more words and is filled in place.
+          hold lslot = slot
+          when lel > 1 {
+            data = put_zeros(data, 4 * (lel - 1))
+          }
+          hold lk = 0
+          li = 0
+          while li < ln {
+            hold lj2 = li
+            while lj2 < ln && sx_index(lb, lj2) != 44 { lj2 = lj2 + 1 }
+            data = set_u32(data, lslot + 4 * lk, tok_num(concat("n", trim(sub(lb, li, lj2)))))
+            lk = lk + 1
+            li = lj2 + 1
+          }
+          listnames = concat(listnames, concat(concat("|", nm), "="))
+          listnames = concat(listnames, numstr(lel))
+          listnames = concat(listnames, "|")
+          extext = ""
+          act = 19
         }
         when act == 0 && istext == 1 {
           lit = sub(extext, 1, len(extext) - 1)
@@ -4897,6 +4992,8 @@ make run() -> num {
   // file-scope because the expression emitter that records the call sites is a
   // function.
   eq_used = 0
+  listnames = ""
+  listnames = listnames + "" 
   eq_calls = []
   // chr: one 4-byte cell per source occurrence holds the byte, and `show
   // chr(...)` reuses one hidden (pointer, length) slot. Both live in the data

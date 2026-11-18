@@ -1,2 +1,0 @@
-hold xs = [1, 2]
-show xs[0]

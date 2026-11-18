@@ -1,0 +1,45 @@
+// Numeric list literals: `hold xs = [7, 8, 9]` writes the elements into the
+// data segment at compile time (the language has no element assignment), so the
+// declaration emits no code, `xs[<literal>]` is one variable load at
+// base + 4*index, and `len(xs)` is the constant element count. Indices are
+// bounds-checked against that count at compile time.
+hold xs = [7, 8, 9]
+show xs[0]
+show xs[1]
+show xs[2]
+show len(xs)
+
+// an element is a value: arithmetic, conditions, and both sides of a compare
+show xs[0] + xs[2]
+show xs[1] * 2 - 1
+show len(xs) * 10 + xs[0]
+when xs[1] == 8 {
+  show "eight"
+} otherwise {
+  show "other"
+}
+
+// one element, a large element, and a second list in the same program
+hold one = [42]
+show one[0]
+show len(one)
+hold big = [100000, 200000]
+show big[0] + big[1]
+show len(big) + len(xs)
+
+// a list element drives a loop counter
+hold total = 0
+hold i = 0
+while i < len(xs) {
+  when i == 0 {
+    total = total + xs[0]
+  } otherwise {
+    when i == 1 {
+      total = total + xs[1]
+    } otherwise {
+      total = total + xs[2]
+    }
+  }
+  i = i + 1
+}
+show total

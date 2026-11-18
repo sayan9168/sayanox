@@ -146,6 +146,24 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   the refusal matrix is 63 (`refuse/streq_in_body.sa` became a legal program and
   was deleted, its forms moved into `streq_body`).
 
+- **Numeric list literals** (2026-11-17, step 15): the first aggregate slice.
+  `hold xs = [7, 8, 9]` writes the elements into the data segment at compile
+  time (the language has no element assignment, so no store is ever emitted for
+  the declaration), `xs[<integer literal>]` lowers to one variable load at
+  `base + 4*index`, and `len(xs)` pushes the element count as an immediate.
+  Indices are compile-time checked against that count, so `xs[2]` on a
+  two-element list is a refusal rather than a fault, and a runtime index is
+  refused because a list here is a fixed set of words. Two elements or a
+  hundred work; the same list can be read in arithmetic, in `when`/`while`
+  conditions and next to `len`. The new `list_num` fixture covers reads, `len`
+  in arithmetic, a conditional, a one-element list, a second list and values
+  used as loop counters, and agrees on the six execution paths (i386 8272
+  bytes, reviewed AArch64/RV64IM goldens, arch-neutral data image, output equal
+  to the x86-64 native AOT lane). `refuse/list.sa` became a legal program and
+  was replaced by `refuse/list_dynamic_index.sa` and
+  `refuse/list_index_past_end.sa`, so the refusal matrix stays 64. Structs, FP
+  expressions and file APIs are still open.
+
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
@@ -285,8 +303,16 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   call, a `-> str` result assigned to a numeric variable, a num-returning call as
   a `concat` operand, and any parameter or result type other than `num`/`str`.
 
-Lists, structs, floating-point expressions, general
-file APIs, and garbage collection remain unsupported by this compiler; recursion
+Numeric **list literals** are supported in a bounded form:
+`hold xs = [7, 8, 9]` stores the elements in the data segment, `xs[<integer
+literal>]` is one variable load at base + 4*index, and `len(xs)` is the
+compile-time element count. Elements are integer literals only, the index must
+be an integer literal (a runtime index is refused), an index at or past the end
+is refused, an empty list is refused, and a list literal inside a `make` body is
+refused. The language has no element assignment, so nothing has to be mutable
+and the declaration emits no code at all. Structs, floating-point expressions,
+general file APIs, and garbage collection remain unsupported by this compiler;
+recursion
 is supported but capped at 64 live frames, so an unbounded recurrence is a
 runtime exit, not a compile-time guarantee. `chr` is accepted as
 a whole string value and as one whole argument of `concat`, `string_eq` and
