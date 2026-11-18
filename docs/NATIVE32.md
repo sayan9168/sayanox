@@ -123,10 +123,28 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   shared comparison routine is placed after the main program, but the bodies are
   emitted after it and the call sites are patched when the routine is placed —
   so a body comparison printed the two operand lengths instead of 0 or 1. No
-  fixture used that form, which is why the suite stayed green. It is now refused
-  with a line-numbered diagnostic (`refuse/streq_in_body.sa` is the negative
-  control on all three targets) until the bodies are emitted before the routine;
-  a body can still compare a value after returning.
+  fixture used that form, which is why the suite stayed green. Step 14 replaced
+  that refusal with a correct link (see *String equality inside `make` bodies*
+  below).
+
+- **String equality inside `make` bodies** (2026-11-17, step 14): the body
+  miscompile from step 13 is fixed by link order instead of a refusal. The
+  shared comparison routine is placed exactly where it was (behind a jump after
+  the main program), but its call sites are now patched *after* the `make`
+  bodies are walked, and a program whose only comparisons are in bodies places
+  the routine after the bodies, behind a jump over the exit sequence. So
+  `show string_eq(x, "ab")` inside a body answers 0 or 1, as do body
+  comparisons with `concat(...)`/`-> str` arguments, comparisons of a body
+  local built by `concat`, comparisons in `when` and `while` conditions inside
+  a body, and recursive bodies that compare at their base case. No pinned image
+  moved: every pre-existing fixture keeps its exact i386 size and its reviewed
+  AArch64/RV64IM golden, because the routine stays at the same offset when the
+  main program compares and the extra patching only rewrites existing
+  displacements. The new `streq_body` fixture is the only one whose routine is
+  reachable only from a body (i386 8361 bytes, reviewed AArch64/RV64IM goldens,
+  arch-neutral data image, output compared with the x86-64 native AOT lane) and
+  the refusal matrix is 63 (`refuse/streq_in_body.sa` became a legal program and
+  was deleted, its forms moved into `streq_body`).
 
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
@@ -267,12 +285,6 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   call, a `-> str` result assigned to a numeric variable, a num-returning call as
   a `concat` operand, and any parameter or result type other than `num`/`str`.
 
-A `string_eq` inside a `make` body is refused: the comparison routine is
-placed after the main program and its call sites are patched there, while the
-bodies are emitted later, so a body comparison cannot be linked yet (it used to
-run with an unpatched call and print the operand lengths). Compare the value
-after the body returns.
-
 Lists, structs, floating-point expressions, general
 file APIs, and garbage collection remain unsupported by this compiler; recursion
 is supported but capped at 64 live frames, so an unbounded recurrence is a
@@ -283,8 +295,8 @@ numeric variable (`chr(n + 1)`, a signed literal such as `chr(-1)`, `chr("A")`,
 `chr(nope)`) is refused in both positions, and a `string_eq` argument may be a
 variable, a literal, `chr(...)`, a `concat(...)` or a `-> str` call, but not an
 arbitrary string expression. Holding the value first (`hold c = chr(65)`)
-remains the way to use it anywhere else. `string_eq` inside a `make` body is
-refused (see the limits list) instead of being miscompiled.
+remains the way to use it anywhere else. A `string_eq` inside a `make` body is
+supported (see *String equality inside `make` bodies*).
 Cross-type assignment and using a string as a numeric value are rejected. `/`
 and fractional literals are rejected because Sayanox numbers are doubles and
 this compiler does not yet implement floating-point expression semantics.
