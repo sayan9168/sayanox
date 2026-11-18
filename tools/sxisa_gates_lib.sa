@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nlist_neg\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -129,6 +129,7 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "streq_body") == 1 { expected = 8361 }
       when string_eq(name, "list_num") == 1 { expected = 8272 }
       when string_eq(name, "list_body") == 1 { expected = 8244 }
+      when string_eq(name, "list_neg") == 1 { expected = 8276 }
       when string_eq(name, "chr") == 1 { expected = 8358 }
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }

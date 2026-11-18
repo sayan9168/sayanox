@@ -178,6 +178,19 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   native AOT lane); every pre-existing fixture keeps its exact size and golden,
   and the refusal matrix stays 64.
 
+- **Signed list elements** (2026-11-17, step 17): an element may be negative.
+  `-` and digits are parsed explicitly (never through the numeric token reader,
+  which treats a sign ambiguously) and the value is stored as the 32-bit two's
+  complement word, so `hold xs = [-5, 0, 7]` reads back `-5`, `0`, `7`, and
+  `xs[0] + xs[2]` is `2` — the same answers as the C backend. Inside a body the
+  element goes through the ordinary push-immediate/store-variable pair, so a
+  frame list carries signs too. The new `list_neg` fixture covers mixed signs,
+  a large negative, arithmetic in both orders, `len`, a conditional on a
+  negative element and two body lists, and agrees on the six execution paths
+  (i386 8276 bytes, reviewed AArch64/RV64IM goldens, arch-neutral data image,
+  output equal to the x86-64 native AOT lane). Every pre-existing fixture keeps
+  its exact size and golden and the refusal matrix stays 64.
+
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
@@ -320,7 +333,8 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
 Numeric **list literals** are supported in a bounded form:
 `hold xs = [7, 8, 9]` stores the elements in the data segment, `xs[<integer
 literal>]` is one variable load at base + 4*index, and `len(xs)` is the
-compile-time element count. Elements are integer literals only, the index must
+compile-time element count. Elements are signed integer literals only (a negative element is stored as its
+32-bit two's complement word, which the signed print path reads back), the index must
 be an integer literal (a runtime index is refused), an index at or past the end
 is refused, and an empty list is refused. A list literal also works inside a
 `make` body: the elements live below the frame base, grow downward from the
