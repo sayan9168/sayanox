@@ -1,0 +1,4 @@
+// The element count is known at compile time, so an index past the end is a
+// compile-time refusal instead of a runtime fault.
+hold xs = [1, 2]
+show xs[2]
