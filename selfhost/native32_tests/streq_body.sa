@@ -1,0 +1,50 @@
+// String equality inside `make` bodies: the shared comparison routine is
+// placed after the bodies and its call sites are patched once every body has
+// been walked, so a comparison in a body links exactly like one in the main
+// program. This fixture is the only one where the routine is needed *only*
+// from a body (the routine then sits behind the exit sequence) and it also
+// mixes a main-program comparison with body comparisons.
+make plain(x: str) -> num {
+  show string_eq(x, "ab")
+  give 7
+}
+make both(x: str, y: str) -> num {
+  when string_eq(concat(x, y), "abba") == 1 {
+    give 1
+  }
+  give 0
+}
+make local(x: str, y: str) -> num {
+  hold s = concat(x, y)
+  show len(s)
+  give string_eq(s, "abba")
+}
+make counted(x: str, n: num) -> num {
+  when n == 0 {
+    give string_eq(x, "aa")
+  }
+  give counted(x, n - 1)
+}
+make wrapped(s: str) -> num {
+  give string_eq(concat("[", s), "[ab")
+}
+make looped(x: str, n: num) -> num {
+  hold hits = 0
+  hold i = 0
+  while i < n {
+    when string_eq(x, "ab") == 1 {
+      hits = hits + 1
+    }
+    i = i + 1
+  }
+  give hits
+}
+hold a = "ab"
+hold b = "ba"
+show plain(a)
+show both(a, b)
+show local(a, b)
+show counted("aa", 3)
+show wrapped(a)
+show looped(a, 2)
+show string_eq(a, "ab")

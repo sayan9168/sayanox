@@ -548,6 +548,12 @@ hold chr_acc_slot = 0 - 1
 hold arch = 0
 hold lineno = 0
 hold eq_used = 0
+// Where the shared string_eq routine landed, and whether it still has to be
+// placed after the `make` bodies (a body may be the only place that compares).
+hold eq_routine_at = 0
+hold eq_routine_emitted = 0
+hold eq_skip = 0
+hold eq_skip_pending = 0
 hold eq_calls = []
 // The statement walk keeps its own state: the program text, the block stack and
 // the counters. run() resets them, and each `make` body is walked with a fresh
@@ -3690,14 +3696,6 @@ make emit_expression(extext: str) -> num {
         when want == 0 {
           hold streq_twoval = fail(1, concat(concat("line ", numstr(lineno)), ": two values in a row in an expression"))
         }
-        // The shared comparison routine is emitted after the main program but
-        // the `make` bodies are emitted after it, and the call sites are
-        // patched when the routine is placed, so a comparison inside a body
-        // used to leave an unpatched call behind. Refuse it until the bodies
-        // are emitted before the routine; a wrong comparison would be silent.
-        when fn_active >= 0 {
-          hold streq_in_body = fail(1, concat(concat("line ", numstr(lineno)), ": string_eq inside a make body is not supported yet (compare the value after the body returns)"))
-        }
         // Each argument is one token (a literal or a name) or a whole string
         // expression spanning several tokens: chr(<expr>), concat(<a>, <b>) or
         // a `-> str` call.
@@ -5130,15 +5128,14 @@ make run() -> num {
   // so the image still ends with the process exit that the container check pins.
   when eq_used == 1 {
     code = emit_jmp(code, arch)
-    hold eq_skip = len(code) - 4
-    hold eq_routine_at = len(code)
+    eq_skip = len(code) - 4
+    eq_routine_at = len(code)
     code = emit_streq_routine(code, arch)
     code = patch_jmp(code, arch, eq_skip, len(code))
-    hold qc = 0
-    while qc < len(eq_calls) {
-      code = patch_call(code, arch, eq_calls[qc], eq_routine_at)
-      qc = qc + 1
-    }
+    eq_routine_emitted = 1
+    // The call sites are patched after the `make` bodies are emitted: a body
+    // walk records its own sites, and a body may be the only place that
+    // compares, in which case the routine itself is placed down there.
   }
 
   // User functions, emitted after the main program behind a jump and reached
@@ -5238,12 +5235,35 @@ make run() -> num {
     }
   }
 
+  // A `string_eq` reached only from a `make` body still needs the shared
+  // routine, and its call sites are only final now, so it is placed here
+  // behind its own jump over the exit sequence. The skips and the sites are
+  // patched once the code length is final, exactly like the overflow stub.
+  when eq_used == 1 && eq_routine_emitted == 0 {
+    code = emit_jmp(code, arch)
+    eq_skip = len(code) - 4
+    eq_routine_at = len(code)
+    code = emit_streq_routine(code, arch)
+    eq_routine_emitted = 1
+    eq_skip_pending = 1
+  }
+
   // exit(0)
   hold exit0_at = len(code)
   code = emit_exit0(code, arch)
   when fn_count > 0 {
     // Now the jump over the recursion-overflow stub can target the exit.
     code = patch_jmp(code, arch, ov_stub_skip, exit0_at)
+  }
+  when eq_skip_pending == 1 {
+    code = patch_jmp(code, arch, eq_skip, exit0_at)
+  }
+  when eq_used == 1 {
+    hold qc = 0
+    while qc < len(eq_calls) {
+      code = patch_call(code, arch, eq_calls[qc], eq_routine_at)
+      qc = qc + 1
+    }
   }
 
   hold cn = len(code)
