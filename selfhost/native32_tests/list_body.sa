@@ -1,0 +1,31 @@
+// A numeric list literal inside a `make` body. A body local lives below the
+// frame base, so the elements grow downward from the reserved word and are
+// stored at run time by the prologue's own store path; a read is one variable
+// load at slot - 4*index and len(xs) stays the compile-time count. Two lists in
+// one body share the frame, and a top-level list in the same program keeps the
+// data-segment layout.
+make pick() -> num {
+  hold xs = [4, 5, 6]
+  when xs[2] == 6 {
+    give xs[0] + len(xs)
+  }
+  give 0
+}
+make twice() -> num {
+  hold a = [1, 2]
+  hold b = [10, 20, 30]
+  give a[1] + b[2]
+}
+make relay(n: num) -> num {
+  hold xs = [3, 4, 5]
+  when n == 0 {
+    give xs[1]
+  }
+  give relay(n - 1)
+}
+show pick()
+show twice()
+show relay(3)
+hold top = [7, 8]
+show top[1]
+show len(top)
