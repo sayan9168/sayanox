@@ -4467,10 +4467,16 @@ make emit_statements() -> num {
             hold lj = li
             while lj < ln && sx_index(lb, lj) != 44 { lj = lj + 1 }
             hold piece = trim(sub(lb, li, lj))
-            when all_digits(piece) == 0 {
+            // A signed element is `-` and digits; it is stored as the 32-bit
+            // two's complement word, which is what the signed print path reads.
+            hold pmag = piece
+            when len(piece) > 1 && sx_index(piece, 0) == 45 {
+              pmag = trim(sub(piece, 1, len(piece)))
+            }
+            when all_digits(pmag) == 0 {
               hold bad_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal takes integer literals only in native32"))
             }
-            when tok_num(concat("n", piece)) > 2147483647 {
+            when tok_num(concat("n", pmag)) > 2147483647 {
               hold big_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list element of 2^31 or more"))
             }
             lel = lel + 1
@@ -4501,7 +4507,16 @@ make emit_statements() -> num {
           while li < ln {
             hold lj2 = li
             while lj2 < ln && sx_index(lb, lj2) != 44 { lj2 = lj2 + 1 }
-            hold lelv = tok_num(concat("n", trim(sub(lb, li, lj2))))
+            hold eltext = trim(sub(lb, li, lj2))
+            hold elneg = 0
+            when len(eltext) > 1 && sx_index(eltext, 0) == 45 {
+              elneg = 1
+              eltext = trim(sub(eltext, 1, len(eltext)))
+            }
+            hold lelv = tok_num(concat("n", eltext))
+            when elneg == 1 {
+              lelv = 4294967296 - lelv
+            }
             when fn_active >= 0 {
               code = emit_push_imm2(code, arch, lelv)
               code = emit_pop_acc(code, arch)

@@ -1,0 +1,37 @@
+// Signed list elements. A negative element is stored as its 32-bit two's
+// complement word -- in the data segment at top level, and through the ordinary
+// push-immediate/store-variable pair inside a body -- so the signed print path
+// and arithmetic read it back as the same number the C backend does.
+hold xs = [-5, 0, 7]
+show xs[0]
+show xs[1]
+show xs[2]
+show len(xs)
+show xs[0] + xs[2]
+show xs[2] + xs[0]
+show xs[0] * 3
+
+// mixed signs in one list, and a negative next to a large positive
+hold mix = [-1, 1000, -100000]
+show mix[0] + mix[1]
+show mix[2] + mix[1]
+show len(mix)
+
+// a conditional on a negative element
+when mix[0] == 0 - 1 {
+  show "minus one"
+} otherwise {
+  show "other"
+}
+
+// a body list with negatives: the elements go through the frame store path
+make diff() -> num {
+  hold ys = [-30, 4, -8]
+  give ys[0] + ys[1] + ys[2]
+}
+make pick() -> num {
+  hold zs = [-42, 7]
+  give zs[1] - zs[0]
+}
+show diff()
+show pick()
