@@ -349,7 +349,10 @@ Numeric **list literals** are supported in a bounded form:
 literal>]` is one variable load at base + 4*index, and `len(xs)` is the
 compile-time element count. An element is a signed integer literal or an ordinary integer expression (a
 literal is baked into the data segment or pushed as an immediate; anything else
-is compiled where the list is declared and stored through the same slot path),
+is compiled where the list is declared and stored through the same slot path;
+note that v1 lists are numeric only -- the published backends refuse
+`hold names = ["ab", "cd"]` with *list elements must be numbers*, so string
+elements are not a missing native32 feature),
 the index must
 be an integer literal (a runtime index is refused), an index at or past the end
 is refused, and an empty list is refused. A list literal also works inside a
