@@ -1,0 +1,6 @@
+hold xs = [10, 20, 30]
+hold keys = [2, 0, 1]
+xs[keys[0]] = 4
+show xs[0]
+show xs[1]
+show xs[2]

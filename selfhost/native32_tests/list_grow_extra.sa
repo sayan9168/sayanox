@@ -1,0 +1,40 @@
+make twice(n: num) -> num {
+  give n * 2
+}
+make item() -> num {
+  show 42
+  give 12
+}
+make visit(n: num) -> num {
+  hold xs = []
+  push(xs, n)
+  push(xs, twice(n))
+  when n == 0 {
+    give xs[0] + xs[1]
+  }
+  hold result = visit(n - 1)
+  give xs[0] + xs[1] + result
+}
+hold i = 0
+while i < 2 {
+  hold values = [ ]
+  show len(values)
+  push(values, i + 7)
+  show values[0]
+  i = i + 1
+}
+hold values2 = []
+push(values2, item())
+push(values2, values2[0] + len(values2))
+show values2[1]
+hold full = []
+hold n = 0
+while n < 16 {
+  full = push(full, n)
+  n = n + 1
+}
+show len(full)
+show full[-1]
+full[-1] = 99
+show full[15]
+show visit(3)

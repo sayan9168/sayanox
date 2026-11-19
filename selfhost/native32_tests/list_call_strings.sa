@@ -1,0 +1,4 @@
+hold xs = [len("a,b"), len("\\\",x"), 7]
+show xs[0]
+show xs[1]
+show xs[2]

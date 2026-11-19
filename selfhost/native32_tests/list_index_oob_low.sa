@@ -1,0 +1,5 @@
+make pick(n: num) -> num {
+  hold xs = [3, 5, 7]
+  give xs[n]
+}
+show pick(0 - 4)

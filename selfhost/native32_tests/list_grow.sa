@@ -1,0 +1,8 @@
+// Empty-origin lists grow in place; both spellings of push are supported.
+hold xs = []
+show len(xs)
+xs = push(xs, 3)
+push(xs, 5)
+show len(xs)
+show xs[0]
+show xs[1]

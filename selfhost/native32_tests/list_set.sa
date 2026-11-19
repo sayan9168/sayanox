@@ -1,0 +1,29 @@
+// Writes to fixed numeric lists, including recursive local frames.
+make next(n: num) -> num {
+  give n + 1
+}
+make index_once() -> num {
+  show 42
+  give 1
+}
+make change(n: num) -> num {
+  hold xs = [10, 20, 30]
+  xs[n] = next(xs[n])
+  when n == 0 {
+    give xs[0]
+  }
+  hold sub = change(n - 1)
+  give xs[n] + sub
+}
+hold xs = [3, 5, 7]
+hold keys = [2, 0, 1]
+hold i = 1
+xs[i] = 20
+hold key = keys[0]
+xs[key] = xs[0] + xs[1]
+xs[next(0) - 1] = 9
+xs[index_once()] = next(xs[1])
+show xs[0]
+show xs[1]
+show xs[2]
+show change(2)

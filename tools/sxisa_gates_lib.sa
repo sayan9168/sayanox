@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nlist_neg\nlist_expr\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nlist_neg\nlist_expr\nlist_call\nlist_index\nstruct_num\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -131,6 +131,9 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "list_body") == 1 { expected = 8244 }
       when string_eq(name, "list_neg") == 1 { expected = 8276 }
       when string_eq(name, "list_expr") == 1 { expected = 8252 }
+      when string_eq(name, "list_call") == 1 { expected = 8248 }
+      when string_eq(name, "list_index") == 1 { expected = 8268 }
+      when string_eq(name, "struct_num") == 1 { expected = 8271 }
       when string_eq(name, "chr") == 1 { expected = 8358 }
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }
@@ -143,6 +146,9 @@ make xc_containers(d: str, arch: str) -> num {
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
+      when string_eq(name, "list_call") == 1 || string_eq(name, "list_index") == 1 || string_eq(name, "struct_num") == 1 {
+        hold reviewed = gl_assert_files_eq(kp_join("selfhost/native32_tests", concat(name, ".want")), kp_join(cdir, "seed.out"), "list independent oracle")
+      }
       hold nat_magic = xc_hex(kp_join(cdir, "native"), 0, "7f454c4602010100")
       hold nat_machine = xc_int(kp_join(cdir, "native"), 18, 2, 62)
       when can_run == 1 {
@@ -152,7 +158,39 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 64)
+  // List writes are outside the native_aot profile. Still require deterministic
+  // images, cross-ISA data equality, and an independent i386 output oracle.
+  hold writes = "list_set\nlist_set_extra\nlist_set_negative\nlist_set_nested\nlist_set_reset\nlist_grow\nlist_grow_extra\n"
+  hold wi = 0
+  while wi < len(writes) {
+    hold begin = wi
+    while wi < len(writes) && sx_index(writes, wi) != 10 { wi = wi + 1 }
+    hold name = gl_slice(writes, begin, wi)
+    wi = wi + 1
+    hold source = kp_join("selfhost/native32_tests", concat(name, ".sa"))
+    hold image = kp_join(d, concat(name, ".elf"))
+    hold build = pg_command(xc_command(source, image, arch), "list write encode")
+    build = pg_command(xc_command(source, kp_join(d, "write-again.elf"), arch), "list write deterministic encode")
+    hold equal = gl_assert_files_eq(image, kp_join(d, "write-again.elf"), "list write deterministic image")
+    hold header = xc_header(image, arch)
+    when string_eq(arch, "i386") == 0 {
+      build = pg_command(xc_command(source, kp_join(d, "write-i386.elf"), "i386"), "list write alternate encoder")
+      hold data = xc_data(image, kp_join(d, "write-i386.elf"))
+      when string_eq(name, "list_set") == 1 || string_eq(name, "list_grow") == 1 {
+        hold golden = kp_join("selfhost/native32_tests/golden", concat(name, concat(".", concat(arch, ".elf"))))
+        equal = gl_assert_files_eq(image, golden, "list write machine-code golden")
+      }
+    } otherwise {
+      when string_eq(name, "list_set") == 1 { hold size = gl_assert_eq_num(path_size(image), 8268, "list write i386 image size") }
+      when string_eq(name, "list_grow") == 1 { hold size = gl_assert_eq_num(path_size(image), 8296, "growing list i386 image size") }
+      when can_run == 1 {
+        hold executable = xb_publish(image)
+        hold run = pg_capture(gl_sh_quote(image), kp_join(d, "list-write.out"))
+        equal = gl_assert_files_eq(kp_join("selfhost/native32_tests", concat(name, ".want")), kp_join(d, "list-write.out"), "list write independent oracle")
+      }
+    }
+  }
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 103)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
@@ -176,7 +214,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold run = pg_capture(gl_sh_quote(kp_join(d, "legal")), kp_join(d, "legal.out"))
       when string_eq(name, "division") == 1 { hold value = kp_eq(d, "legal.out", "3.5\n") }
     }
-    names = "heap_exhaust\nstring_index_oob\nfn_depth_cap\nstr_depth_cap\n"
+    names = "heap_exhaust\nstring_index_oob\nlist_index_oob_high\nlist_index_oob_low\nlist_set_oob_high\nlist_set_oob_low\nlist_grow_capacity\nlist_grow_oob\nlist_grow_oob_low\nlist_grow_set_oob\nfn_depth_cap\nstr_depth_cap\n"
     pos = 0
     while pos < len(names) {
       hold start = pos

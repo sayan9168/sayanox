@@ -1,0 +1,3 @@
+hold xs = []
+push(xs, 1)
+show xs[1]

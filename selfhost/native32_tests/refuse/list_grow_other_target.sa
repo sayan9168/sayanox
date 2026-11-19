@@ -1,0 +1,3 @@
+hold xs = []
+hold ys = []
+xs = push(ys, 2)

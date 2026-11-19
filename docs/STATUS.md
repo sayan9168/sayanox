@@ -1,5 +1,66 @@
 # Status
 
+**2026-11-19 local R02 increment: bounded growing numeric lists**
+
+Empty-origin numeric lists now support runtime length and checked `push`, reads
+and writes on i386, AArch64 and RV64IM, with a 16-element cap and exit 1 on
+capacity or bounds faults. Tests cover recursion, loop resets, side effects,
+reference output, deterministic images and refusals. This is not general dynamic
+list support: aliases, list parameters/returns and growth from nonempty literals
+remain open. R02 still requires general aggregates, floating-point, file/runtime
+APIs, GC, general string expressions and complete guarded CI.
+
+**2026-11-19 local R02 increment: fixed-list element writes**
+
+The three native32 targets now lower checked numeric list element assignment,
+including negative/nested indices and function-local recursive frames. List
+literal initialization inside a loop runs on each iteration. Independent output
+oracles, bounds faults, refusal cases, deterministic images and applicable
+seed/gen2/full-native comparisons pass locally alongside the three ISA gates,
+`test-sxisaexec` and `test-native-sxdefs`. The native_aot subset refuses list
+assignment, the full native compiler faults on negative list indices, and the
+C lanes reject some nested-index assignment forms. General dynamic lists and the rest
+of R02 remain open; complete guarded CI has not run.
+
+
+**2026-11-19 local R02 increment: bounded numeric structs**
+
+Numeric struct declarations, field initializers, reads and assignments lower to fixed
+words for i386, AArch64 and RV64IM, including recursive function-local values.
+The shared fixture agrees with seed-min, gen2, native AOT, the portable IR VM,
+and the three native32 targets; an additional seed/native32 fixture covers
+forms currently rejected by gen2/native AOT. Field assignment agrees with the
+seed and gen2 but is refused by the x86-64 native compilers. Twenty-two new malformed and bound
+refusals run per ISA. The ISA gates, `test-sxisaexec` and `test-native-sxdefs`
+passed locally. General struct semantics and the rest of R02 remain open;
+complete guarded CI has not been run.
+
+
+**2026-11-19 local R02 increment: runtime indexing of fixed lists**
+
+Fixed numeric lists now support checked runtime index expressions on i386,
+AArch64 and RV64IM, including recursive frame-local lists. Negative indices
+count from the end as on the C-output lanes; both x86-64 native compilers
+currently fault on those indices, an outstanding cross-backend discrepancy.
+Same-named lists in different functions are scoped separately, fixing a silent
+length miscompile. Unsafe list rebinding/type changes are explicitly refused.
+The three ISA gates, `test-sxisaexec`, and `test-native-sxdefs` passed locally,
+including independent output oracles and high/low out-of-range faults. This is
+not growing-list support, full native parity or guarded complete CI.
+
+
+**2026-11-19 local R02 increment: list elements containing calls**
+
+The native32 list-element scanner now respects nested parentheses, brackets,
+quoted strings and escaped quotes when finding separators. Multi-argument and
+nested numeric calls can therefore initialize fixed numeric lists, including
+function-local and recursive lists. A hand-calculated oracle, deterministic
+ISA images, cross-backend execution, and malformed/arity refusals cover the
+change. `./sx target test-native32 test-native-arm64 test-native-riscv64
+test-sxisaexec` passed locally; a native-only string-literal separator case is
+separate because seed-min rejects that syntax. This is not full native parity
+or guarded complete CI: R02 remains open.
+
 **2026-11-17 update: a debugger for the portable IR VM — same interpreter, stop test on**
 
 `tools/sxirexec debug` / `debug-bundle` make the portable IR virtual machine

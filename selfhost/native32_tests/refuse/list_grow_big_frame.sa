@@ -1,0 +1,8 @@
+make f() -> num {
+  hold a = []
+  hold b = []
+  hold c = []
+  hold d = []
+  give 0
+}
+show f()

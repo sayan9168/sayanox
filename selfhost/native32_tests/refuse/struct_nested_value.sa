@@ -1,0 +1,4 @@
+struct A { n }
+struct B { nested }
+hold p = B { A { 2 } }
+show 1

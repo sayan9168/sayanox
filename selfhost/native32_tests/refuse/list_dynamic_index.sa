@@ -1,5 +1,0 @@
-// A list is a fixed set of words in the data segment: the index has to be an
-// integer literal, so a runtime index is refused rather than lowered.
-hold xs = [1, 2, 3]
-hold i = 1
-show xs[i]

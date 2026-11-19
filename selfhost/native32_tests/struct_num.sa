@@ -1,0 +1,33 @@
+// Both declarations and per-call frame-local numeric structs. {
+hold marker = "\"{"
+struct Point { x, y }
+struct Box {
+  left,
+  right
+}
+make calc(n: num) -> num {
+  hold p = Point { n, 2 }
+  hold x = p.x
+  hold y = p.y
+  give x + y
+}
+make recurse(n: num) -> num {
+  hold p = Point { n, 1 }
+  hold a = p.x
+  hold b = p.y
+  when n == 0 {
+    give b
+  }
+  give a + b + recurse(n - 1)
+}
+hold p = Point { x: 7, y: 5 }
+hold b = Box { left: 6, right: 9 }
+show p.x
+show p.y
+show b.left
+show b.right
+show calc(4)
+show recurse(3)
+hold x = p.x
+hold y = b.right
+show x + y

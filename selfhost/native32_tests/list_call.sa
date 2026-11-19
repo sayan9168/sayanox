@@ -1,0 +1,23 @@
+// Commas inside nested calls belong to the expression, not the list.
+make add(a: num, b: num) -> num {
+  give a + b
+}
+make build(n: num) -> num {
+  hold xs = [add(n, 2), add(add(n, 1), add(2, 3)), n * add(2, 3)]
+  give xs[0] + xs[1] + xs[2]
+}
+make recur(n: num) -> num {
+  hold xs = [add(n, 1), add(n, 2)]
+  when n == 0 {
+    give xs[0] + xs[1]
+  }
+  give xs[0] + xs[1] + recur(n - 1)
+}
+hold top = [add(2, 3), add(add(1, 2), 4), (add(3, 4) + 1) * 2]
+show top[0]
+show top[1]
+show top[2]
+show len(top)
+show build(4)
+show build(0)
+show recur(3)

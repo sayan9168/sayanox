@@ -177,6 +177,75 @@ make verify_native_literal_forms(dir: str) -> num {
   give 0
 }
 
+// Numeric len expressions containing commas and escaped quotes are accepted
+// by native32 and the full native compiler, but rejected by the seed grammar.
+make verify_native_only_list(dir: str, name: str) -> num {
+  hold source = concat("selfhost/native32_tests/", concat(name, ".sa"))
+  hold want = concat("selfhost/native32_tests/", concat(name, ".want"))
+  hold i = 0
+  while i < 3 {
+    hold arch = "i386"
+    when i == 1 { arch = "arm64" }
+    when i == 2 { arch = "riscv64" }
+    hold elf = concat(dir, concat(concat("/", name), concat("-", concat(arch, ".elf"))))
+    hold out = concat(elf, ".out")
+    when run_command(concat("./tools/native32 ", concat(sh_q(source), concat(" ", concat(sh_q(elf), concat(" ", arch)))))) != 0 { hold f = fail_t(concat("list string expression compile: ", arch)) }
+    hold cmd = concat("./tools/sxisaexec --arch ", concat(arch, concat(" --out ", concat(sh_q(out), concat(" ", sh_q(elf))))))
+    when i == 0 { cmd = concat("chmod +x ", concat(sh_q(elf), concat(" && ", concat(sh_q(elf), concat(" > ", sh_q(out)))))) }
+    // The earlier native literal probe establishes whether the host runs i386.
+    hold can_i386 = run_command(concat(sh_q(concat(dir, "/literal-probe.elf")), " >/dev/null 2>&1"))
+    when i > 0 || can_i386 == 0 {
+      when run_command(cmd) != 0 { hold f = fail_t(concat("list string expression execution: ", arch)) }
+      hold equal = assert_files_eq(want, out, concat("list string expression oracle: ", arch))
+    } otherwise { show "[SKIP] kernel cannot execute i386 list string expressions" }
+    i = i + 1
+  }
+  give 0
+}
+
+// Both C-output compilers accept these cases unlike native_aot.
+make verify_two_reference(dir: str, name: str) -> num {
+  hold source = concat("selfhost/native32_tests/", concat(name, ".sa"))
+  hold want = concat("selfhost/native32_tests/", concat(name, ".want"))
+  hold seedc = concat(dir, "/negative.seed.c")
+  hold g2c = concat(dir, "/negative.gen2.c")
+  hold exe = concat(dir, "/negative.ref")
+  hold out = concat(dir, "/negative.ref.out")
+  when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(source), concat(" > ", sh_q(seedc))))) != 0 { hold f = fail_t("negative list seed compilation") }
+  when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(seedc)))))) != 0 { hold f = fail_t("negative list seed C build") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("negative list seed execution") }
+  hold a = assert_files_eq(want, out, "negative list seed oracle")
+  when run_command(concat("./selfhost/gen2 ", concat(sh_q(source), concat(" ", sh_q(g2c))))) != 0 { hold f = fail_t("negative list gen2 compilation") }
+  when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(g2c)))))) != 0 { hold f = fail_t("negative list gen2 C build") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("negative list gen2 execution") }
+  give assert_files_eq(want, out, "negative list gen2 oracle")
+}
+
+// The seed accepts reordered named and compound numeric struct expressions;
+// gen2 and native_aot currently refuse several of these forms.
+make verify_struct_extra_seed(dir: str) -> num {
+  hold source = "selfhost/native32_tests/struct_extra.sa"
+  hold cfile = concat(dir, "/struct-extra.seed.c")
+  hold exe = concat(dir, "/struct-extra.seed")
+  hold out = concat(dir, "/struct-extra.seed.out")
+  when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(source), concat(" > ", sh_q(cfile))))) != 0 { hold f = fail_t("struct extra seed emit") }
+  when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(cfile)))))) != 0 { hold f = fail_t("struct extra seed C build") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("struct extra seed execution") }
+  give assert_files_eq("selfhost/native32_tests/struct_extra.want", out, "struct extra seed oracle")
+}
+
+// The full native compiler supports positive indexed assignment, unlike the
+// bounded native_aot profile. Run it against the same independent oracle.
+make verify_list_set_full_native(dir: str, name: str) -> num {
+  hold source = concat("selfhost/native32_tests/", concat(name, ".sa"))
+  hold want = concat("selfhost/native32_tests/", concat(name, ".want"))
+  hold exe = concat(dir, concat("/", concat(name, ".full.elf")))
+  hold out = concat(exe, ".out")
+  when run_command(concat("./bootstrap/sxc_native.bin ", concat(sh_q(source), concat(" ", sh_q(exe))))) != 0 { hold f = fail_t("full native list write compilation") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("full native list write execution") }
+  give assert_files_eq(want, out, "full native list write oracle")
+}
+
 make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden_riscv64: str) -> num {
   hold cc = cc_bin()
   hold stem = concat(dir, concat("/", name))
@@ -407,6 +476,26 @@ make test_string_index_bounds(dir: str) -> num {
     hold f6 = fail_t("RV64 out-of-range string index did not fail closed")
   }
   show "[ok] string byte indexing checks bounds on AArch64 and RV64"
+  give 0
+}
+
+// Runtime index faults must exit 1 rather than access an invalid element.
+make test_list_index_fault(dir: str, name: str) -> num {
+  hold source = concat("selfhost/native32_tests/", concat(name, ".sa"))
+  hold i = 0
+  while i < 2 {
+    hold arch = "arm64"
+    when i == 1 { arch = "riscv64" }
+    hold stem = concat(dir, concat("/", concat(name, arch)))
+    hold elf = concat(stem, ".elf")
+    hold out = concat(stem, ".out")
+    hold stats = concat(stem, ".stats")
+    when run_command(concat("./tools/native32 ", concat(sh_q(source), concat(" ", concat(sh_q(elf), concat(" ", arch)))))) != 0 { hold f = fail_t(concat("list index fault compile: ", arch)) }
+    hold cmd = concat("./tools/sxisaexec --arch ", concat(arch, concat(" --out ", concat(sh_q(out), concat(" --stats ", concat(sh_q(stats), concat(" ", sh_q(elf))))))))
+    when run_command(cmd) != 1 { hold f = fail_t(concat("list index fault status: ", arch)) }
+    when text_has(read_file(stats), "exit=1") == 0 || len(read_file(out)) != 0 { hold f = fail_t(concat("list index fault did not fail closed: ", arch)) }
+    i = i + 1
+  }
   give 0
 }
 
@@ -1022,7 +1111,37 @@ hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa",
 hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals_common.sa", "", "")
 hold vlit_oracle = assert_files_eq("selfhost/native32_tests/len_literals.want", concat(dir, "/len_literals.seed.out"), "literal len independent byte-length oracle")
 hold vlit_forms = verify_native_literal_forms(dir)
+hold vlist_strings = verify_native_only_list(dir, "list_call_strings")
+hold vlist_extra = verify_native_only_list(dir, "list_index_extra")
+hold vlist_negative = verify_native_only_list(dir, "list_index_negative")
+hold vlist_negative_refs = verify_two_reference(dir, "list_index_negative")
+hold vstruct_extra = verify_native_only_list(dir, "struct_extra")
+hold vstruct_seed = verify_struct_extra_seed(dir)
+hold vstruct_mutation = verify_native_only_list(dir, "struct_mutation")
+hold vstruct_mutation_refs = verify_two_reference(dir, "struct_mutation")
+hold vset = verify_native_only_list(dir, "list_set")
+hold vset_refs = verify_two_reference(dir, "list_set")
+hold vset_full = verify_list_set_full_native(dir, "list_set")
+hold vset_extra = verify_native_only_list(dir, "list_set_extra")
+hold vset_neg = verify_native_only_list(dir, "list_set_negative")
+hold vset_neg_refs = verify_two_reference(dir, "list_set_negative")
+hold vset_nested = verify_native_only_list(dir, "list_set_nested")
+hold vset_nested_full = verify_list_set_full_native(dir, "list_set_nested")
+hold vset_reset = verify_native_only_list(dir, "list_set_reset")
+hold vset_reset_refs = verify_two_reference(dir, "list_set_reset")
+hold vset_reset_full = verify_list_set_full_native(dir, "list_set_reset")
+hold vgrow = verify_six_way(dir, "list_grow", "selfhost/native32_tests/list_grow.sa", "selfhost/native32_tests/golden/list_grow.arm64.elf", "selfhost/native32_tests/golden/list_grow.riscv64.elf")
+hold vgrow_oracle = assert_files_eq("selfhost/native32_tests/list_grow.want", concat(dir, "/list_grow.seed.out"), "growing list independent oracle")
+hold vgrow_full = verify_list_set_full_native(dir, "list_grow")
+hold vgrow_extra = verify_native_only_list(dir, "list_grow_extra")
+hold vgrow_extra_refs = verify_two_reference(dir, "list_grow_extra")
 hold vfn = verify_six_way(dir, "fn", "selfhost/native32_tests/fn.sa", "selfhost/native32_tests/golden/fn.arm64.elf", "selfhost/native32_tests/golden/fn.riscv64.elf")
+hold vlistcall = verify_six_way(dir, "list_call", "selfhost/native32_tests/list_call.sa", "selfhost/native32_tests/golden/list_call.arm64.elf", "selfhost/native32_tests/golden/list_call.riscv64.elf")
+hold vlistcall_oracle = assert_files_eq("selfhost/native32_tests/list_call.want", concat(dir, "/list_call.seed.out"), "list call independent oracle")
+hold vlistindex = verify_six_way(dir, "list_index", "selfhost/native32_tests/list_index.sa", "selfhost/native32_tests/golden/list_index.arm64.elf", "selfhost/native32_tests/golden/list_index.riscv64.elf")
+hold vlistindex_oracle = assert_files_eq("selfhost/native32_tests/list_index.want", concat(dir, "/list_index.seed.out"), "list index independent oracle")
+hold vstruct = verify_six_way(dir, "struct_num", "selfhost/native32_tests/struct_num.sa", "selfhost/native32_tests/golden/struct_num.arm64.elf", "selfhost/native32_tests/golden/struct_num.riscv64.elf")
+hold vstruct_oracle = assert_files_eq("selfhost/native32_tests/struct_num.want", concat(dir, "/struct_num.seed.out"), "numeric struct independent oracle")
 hold vrec = verify_six_way(dir, "recursion", "selfhost/native32_tests/recursion.sa", "selfhost/native32_tests/golden/recursion.arm64.elf", "selfhost/native32_tests/golden/recursion.riscv64.elf")
 hold vstrfn = verify_six_way(dir, "strfn", "selfhost/native32_tests/strfn.sa", "selfhost/native32_tests/golden/strfn.arm64.elf", "selfhost/native32_tests/golden/strfn.riscv64.elf")
 hold vstrrec = verify_six_way(dir, "strrec", "selfhost/native32_tests/strrec.sa", "selfhost/native32_tests/golden/strrec.arm64.elf", "selfhost/native32_tests/golden/strrec.riscv64.elf")
@@ -1030,6 +1149,14 @@ hold vstrarity = verify_six_way(dir, "strarity", "selfhost/native32_tests/strari
 hold vcap = test_fn_depth_cap(dir)
 hold vh = test_concat_heap_limit(dir)
 hold vix = test_string_index_bounds(dir)
+hold vixhi = test_list_index_fault(dir, "list_index_oob_high")
+hold vixlo = test_list_index_fault(dir, "list_index_oob_low")
+hold vsethi = test_list_index_fault(dir, "list_set_oob_high")
+hold vsetlo = test_list_index_fault(dir, "list_set_oob_low")
+hold vgrow_cap = test_list_index_fault(dir, "list_grow_capacity")
+hold vgrow_oob = test_list_index_fault(dir, "list_grow_oob")
+hold vgrow_oob_low = test_list_index_fault(dir, "list_grow_oob_low")
+hold vgrow_set_oob = test_list_index_fault(dir, "list_grow_set_oob")
 
 hold deep_sa = concat(dir, "/isa_deep.sa")
 hold wd = write_deep_fixture(deep_sa)

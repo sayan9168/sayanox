@@ -1,0 +1,6 @@
+make change(i: num) -> num {
+  hold xs = [1, 2]
+  xs[i] = 3
+  give 99
+}
+show change(0 - 3)

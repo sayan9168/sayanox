@@ -1,0 +1,39 @@
+// Runtime indices: globals grow up in data; locals grow down in each frame.
+make first() -> num {
+  hold xs = [99]
+  give len(xs)
+}
+make choose(n: num) -> num {
+  hold xs = [10, 20, 30]
+  hold idx = [2, 0, 1]
+  hold pick = idx[n]
+  give xs[pick] + len(xs)
+}
+make sum(n: num) -> num {
+  hold xs = [10, 20, 30]
+  when n == 0 {
+    give xs[0]
+  }
+  give xs[n - 1] + sum(n - 1)
+}
+make scalar(xs: num) -> num {
+  give xs + 1
+}
+make idxfn(n: num) -> num {
+  give n + 1
+}
+show first()
+show scalar(9)
+show choose(0)
+show choose(1)
+show choose(2)
+show sum(3)
+hold xs = [3, 5, 7]
+hold lookup = [2, 0, 1]
+hold j = 2
+show xs[j]
+show xs[(1 + 1)] * 2
+show xs[idxfn(0)]
+hold k = lookup[1]
+show xs[k]
+show len(xs)

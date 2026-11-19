@@ -1,0 +1,6 @@
+hold xs = []
+hold i = 0
+while i < 17 {
+  push(xs, i)
+  i = i + 1
+}
