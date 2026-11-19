@@ -1,0 +1,9 @@
+hold i = 0
+hold total = 0
+while i < 3 {
+  hold local = [7, 8]
+  total = total + local[0]
+  local[0] = 99
+  i = i + 1
+}
+show total

@@ -1,0 +1,2 @@
+hold xs = []
+push(xs, "hi")

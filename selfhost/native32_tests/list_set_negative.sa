@@ -1,0 +1,7 @@
+hold xs = [10, 20, 30]
+hold last = 0 - 1
+xs[last] = 9
+xs[0 - 3] = 5
+show xs[0]
+show xs[1]
+show xs[2]

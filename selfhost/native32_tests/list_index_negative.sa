@@ -1,0 +1,7 @@
+// Negative indices count backward, as in the seed and gen2 C runtimes.
+hold xs = [11, 22, 33]
+hold i = 0 - 1
+show xs[i]
+hold j = 0 - 3
+show xs[j]
+show xs[0 - 2]

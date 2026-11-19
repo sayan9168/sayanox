@@ -1,0 +1,38 @@
+// Numeric structs with both declaration forms and initialization styles.
+struct Point { x, y }
+struct Box {
+  left,
+  right
+}
+make add(a: num, b: num) -> num {
+  give a + b
+}
+make calc(n: num) -> num {
+  hold p = Point { x: n + 1, y: add(n, 2) }
+  give p.x + p.y
+}
+make recurse(n: num) -> num {
+  hold p = Point { n, n + 1 }
+  when n == 0 {
+    give p.y
+  }
+  give p.x + p.y + recurse(n - 1)
+}
+hold start = 3
+hold p = Point { 7, start + 2 }
+hold b = Box { right: add(4, 5), left: p.y + 1 }
+show p.x
+show p.y
+show b.left
+show b.right
+show p.x + b.right
+show calc(4)
+show recurse(3)
+when p.x > b.left {
+  show 1
+} otherwise {
+  show 0
+}
+hold items = [10, 20, 30]
+hold k = Point { 0, 2 }
+show items[k.y]

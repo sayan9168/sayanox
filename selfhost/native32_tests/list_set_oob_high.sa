@@ -1,0 +1,4 @@
+hold xs = [1, 2]
+hold i = 2
+xs[i] = 3
+show 99

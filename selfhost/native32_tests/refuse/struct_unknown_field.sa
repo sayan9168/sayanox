@@ -1,0 +1,3 @@
+struct Point { x, y }
+hold p = Point { x: 1, z: 2 }
+show 1

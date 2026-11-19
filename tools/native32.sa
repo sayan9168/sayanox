@@ -19,8 +19,8 @@
 // Sayanox runtime. It supports static strings, len, byte indexing, a bounded
 // bump-heap concat, and functions with per-depth call frames whose parameters
 // and results may be numbers or strings; numeric list literals are bounded to
-// fixed words with literal indices (below), and it has no structs, collector,
-// general file API, or floating-point expression code. Unsupported forms are
+// fixed words with checked runtime indices (below), plus bounded numeric
+// structs. It has no collector, general file API, or floating-point code. Unsupported forms are
 // refused with a diagnostic and non-zero exit.
 //
 // The subset, exactly:
@@ -553,6 +553,10 @@ hold eq_used = 0
 // encoding as `names`. The elements themselves live in the data segment at the
 // slot recorded in `names`, so a read is one variable load.
 hold listnames = "" 
+// Bounded numeric struct declarations are packed in one table to keep this
+// compiler within native_aot's 64-global limit. Instances use a $-prefixed
+// key in the already-scoped list table; $ cannot start a source identifier.
+hold struct_defs = ""
 // Where the shared string_eq routine landed, and whether it still has to be
 // placed after the `make` bodies (a body may be the only place that compares).
 hold eq_routine_at = 0
@@ -2612,7 +2616,17 @@ make tokenize(ex: str) -> str {
         }
       }
       when i < n && sx_index(ex, i) == 46 {
-        bad = concat(concat("a field of '", nmtext), "' (this backend has no structs)")
+        hold owner = nmtext
+        i = i + 1
+        hold member = ""
+        while i < n && is_name_char(sx_index(ex, i)) == 1 {
+          member = concat(member, chr(sx_index(ex, i)))
+          i = i + 1
+        }
+        nmtext = concat(concat(owner, "."), member)
+        when slot_of(listnames, concat("$", owner)) < 0 || len(member) == 0 || slot_of(names, nmtext) < 0 {
+          bad = concat(concat("an unknown numeric struct field '", nmtext), "'")
+        }
       }
       out = add_tok(out, concat("v", nmtext))
       done = 1
@@ -2813,6 +2827,35 @@ make op_prec(op: num) -> num {
     r = 3
   }
   give r
+}
+
+// Find a list element's separator without splitting function arguments,
+// nested indices or quoted strings. The expression parser diagnoses malformed
+// delimiters; this scanner only identifies commas at the outer list level.
+make list_element_end(s: str, start: num) -> num {
+  hold i = start
+  hold parens = 0
+  hold brackets = 0
+  hold quoted = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when quoted == 1 {
+      when c == 92 && i + 1 < len(s) {
+        i = i + 1
+      } otherwise {
+        when c == 34 { quoted = 0 }
+      }
+    } otherwise {
+      when c == 34 { quoted = 1 }
+      when c == 40 { parens = parens + 1 }
+      when c == 41 { parens = parens - 1 }
+      when c == 91 { brackets = brackets + 1 }
+      when c == 93 { brackets = brackets - 1 }
+      when c == 44 && parens == 0 && brackets == 0 { give i }
+    }
+    i = i + 1
+  }
+  give i
 }
 
 // ---- instruction emitters -------------------------------------------------
@@ -3659,6 +3702,258 @@ make concat_token_text(toks: str, source: str, from: num, upto: num) -> str {
   give out
 }
 
+// Stack: base, element count and index. Normalize negative indices, check
+// bounds and push the selected value. kind 0 is a byte string, 1/2 read an
+// ascending global or descending local list, 3/4 push its element address for
+// assignment. Failure exits with status 1.
+make emit_checked_index(kind: num) -> num {
+        when arch == 0 {
+          code = e1(code, 90)
+          code = e1(code, 89)
+          code = e1(code, 88)
+          code = e1(code, 133)
+          code = e1(code, 210)
+          code = e1(code, 15)
+          code = e1(code, 137)
+          hold neg_index_site = len(code)
+          code = e32(code, 0)
+          code = e1(code, 1)
+          code = e1(code, 202)
+          hold neg_index_done = len(code)
+          code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
+          code = e1(code, 59)
+          code = e1(code, 209)
+          hold bad_index_site = len(code)
+          code = e1(code, 15)
+          code = e1(code, 131)
+          code = e32(code, 0)
+          when kind == 0 {
+            code = e1(code, 15)
+            code = e1(code, 182)
+            code = e1(code, 4)
+            code = e1(code, 16)
+          } otherwise {
+            when kind == 2 || kind == 4 { code = e1(code, 247)
+              code = e1(code, 218) }
+            // mov eax,[eax+edx*4] for a read; lea for an assignment.
+            when kind < 3 { code = e1(code, 139) } otherwise { code = e1(code, 141) }
+            code = e1(code, 4)
+            code = e1(code, 144)
+          }
+          code = e1(code, 80)
+          hold done_index_site = len(code)
+          code = e1(code, 233)
+          code = e32(code, 0)
+          hold bad_index = len(code)
+          code = e1(code, 184)
+          code = e32(code, 1)
+          code = e1(code, 187)
+          code = e32(code, 1)
+          code = e1(code, 205)
+          code = e1(code, 128)
+          hold done_index = len(code)
+          code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
+          code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
+        } otherwise {
+          when arch == 1 {
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127724)
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127723)
+            code = emit_pop_acc(code, arch)
+            code = e_w(code, 2852127722)
+            code = e_w(code, 1895825823)
+            hold neg_a64_site = len(code)
+            code = e_w(code, 1409286154)
+            code = e_w(code, 185270668)
+            hold neg_a64_done = len(code)
+            code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
+            code = e_w(code, 1795883423)
+            hold bad_a64_site = len(code)
+            code = e_w(code, 1409286146)
+            when kind == 0 {
+              code = e_w(code, 2332819786)
+              code = e_w(code, 960495936)
+            } otherwise {
+              // Double the checked index twice, then add/sub its byte offset.
+              code = e_w(code, 185336204)
+              code = e_w(code, 185336204)
+              when kind == 1 || kind == 3 { code = e_w(code, 2332819786) }
+              when kind == 2 || kind == 4 { code = e_w(code, 3406561610) }
+              when kind < 3 { code = e_w(code, 3107979584) } otherwise { code = e_w(code, 2852783072) }
+            }
+            code = e_w(code, 4162785248)
+            hold done_a64_site = len(code)
+            code = e_w(code, 335544320)
+            hold bad_a64 = len(code)
+            code = a_movz(code, 1, 0, 1)
+            code = a_movz(code, 1, 8, 93)
+            code = e_w(code, 3556769793)
+            hold done_a64 = len(code)
+            code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
+            code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
+          } otherwise {
+            code = rv_pop_reg(code, 12)
+            code = rv_pop_reg(code, 11)
+            code = rv_pop_reg(code, 10)
+            hold neg_rv_site = len(code)
+            code = e_w(code, rv_b_word(0, 0, 12, 5))
+            code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
+            hold neg_rv_done = len(code)
+            code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
+            hold bad_rv_site = len(code)
+            code = e_w(code, rv_b_word(0, 11, 12, 7))
+            when kind == 0 {
+              code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
+              code = e_w(code, rv_i(0, 10, 4, 10, 3))
+            } otherwise {
+              code = e_w(code, rv_r(0, 12, 12, 0, 12, 59))
+              code = e_w(code, rv_r(0, 12, 12, 0, 12, 59))
+              when kind == 1 || kind == 3 { code = e_w(code, rv_r(0, 12, 10, 0, 10, 51)) }
+              when kind == 2 || kind == 4 { code = e_w(code, rv_r(32, 12, 10, 0, 10, 51)) }
+              when kind < 3 { code = e_w(code, rv_i(0, 10, 2, 10, 3)) }
+            }
+            code = rv_push_a0(code)
+            hold done_rv_site = len(code)
+            code = e_w(code, rv_j_word(0, 0))
+            hold bad_rv = len(code)
+            code = e_w(code, rv_i(1, 0, 0, 10, 19))
+            code = e_w(code, rv_i(93, 0, 0, 17, 19))
+            code = e_w(code, 115)
+            hold done_rv = len(code)
+            code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
+            code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
+          }
+        }
+  give 0
+}
+
+// Push the address of a fixed list's first word. Frame bases are reloaded at
+// runtime so recursive invocations never share list storage.
+make emit_list_base(slot: num) -> num {
+  when fn_active < 0 {
+    code = emit_push_imm2(code, arch, dva_of(slot))
+  } otherwise {
+    hold disp = slot - fn_frame_mark
+    when arch == 0 {
+      code = e1(code, 161)
+      code = e32(code, dva_of(fp_slot))
+      code = e1(code, 5)
+      code = e32(code, disp)
+    } otherwise {
+      when arch == 1 {
+        code = a_abs(code, 9, dva_of(fp_slot))
+        code = e_w(code, 3107979562)
+        code = a_fp_disp(code, 10, disp)
+        code = e_w(code, 2852717536)
+      } otherwise {
+        code = rv_li32(code, 5, dva_of(fp_slot))
+        code = e_w(code, rv_i(0, 5, 2, 6, 3))
+        code = e_w(code, rv_i(disp, 6, 0, 10, 19))
+      }
+    }
+    code = emit_push_acc(code, arch)
+  }
+  give 0
+}
+
+// Closing bracket of an assignment target, with nested indices and strings.
+make list_target_close(text: str) -> num {
+  hold i = 0
+  hold depth = 0
+  hold quoted = 0
+  while i < len(text) {
+    hold c = sx_index(text, i)
+    when quoted == 1 {
+      when c == 92 && i + 1 < len(text) { i = i + 1 } otherwise {
+        when c == 34 { quoted = 0 }
+      }
+    } otherwise {
+      when c == 34 { quoted = 1 }
+      when c == 91 { depth = depth + 1 }
+      when c == 93 {
+        depth = depth - 1
+        when depth == 0 { give i }
+      }
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// Store the accumulator through the checked address left on the value stack.
+make emit_store_indexed() -> num {
+  when arch == 0 {
+    code = e1(code, 89)
+    code = e1(code, 137)
+    code = e1(code, 1)
+  } otherwise {
+    when arch == 1 {
+      // ldr x1,[sp],#16; str w0,[x1]
+      code = e_w(code, 4165011425)
+      code = e_w(code, 3103784992)
+    } otherwise {
+      code = rv_pop_reg(code, 11)
+      code = e_w(code, rv_s(0, 10, 11, 2))
+    }
+  }
+  give 0
+}
+
+// Append to an empty-origin bounded list. Length and element storage are
+// frame-local when needed. A full list exits 1 rather than silently truncating.
+// Returning or aliasing the list is intentionally unsupported.
+make emit_list_append(call: str, assigned: str) -> num {
+  when starts(call, "push(") == 0 || len(call) < 7 || sx_index(call, len(call) - 1) != 41 {
+    hold e = fail(1, concat(concat("line ", numstr(lineno)), ": malformed push"))
+  }
+  hold args = sub(call, 5, len(call) - 1)
+  hold comma = list_element_end(args, 0)
+  when comma >= len(args) { hold e = fail(1, "push requires a list and numeric value") }
+  hold name = trim(sub(args, 0, comma))
+  hold value = trim(sub(args, comma + 1, len(args)))
+  when is_bare_name(name) == 0 || len(value) == 0 || list_element_end(args, comma + 1) != len(args) {
+    hold e = fail(1, "push requires exactly a list name and numeric value")
+  }
+  when len(assigned) > 0 && string_eq(name, assigned) == 0 {
+    hold e = fail(1, "push result can only be assigned back to the same list")
+  }
+  hold length_slot = slot_of(listnames, concat("#", name))
+  when length_slot < 0 { hold e = fail(1, "push requires a list declared as [] in native32") }
+  hold base = slot_of(names, name)
+  hold cap = slot_of(listnames, name)
+  hold base_done = emit_list_base(base)
+  code = emit_push_imm2(code, arch, cap)
+  code = emit_load_var(code, arch, length_slot)
+  hold kind = 3
+  when fn_active >= 0 { kind = 4 }
+  hold checked = emit_checked_index(kind)
+  hold value_done = emit_expression(value)
+  hold store_done = emit_store_indexed()
+  code = emit_load_var(code, arch, length_slot)
+  code = emit_push_imm2(code, arch, 1)
+  code = emit_op2(code, arch, 1)
+  code = emit_pop_acc(code, arch)
+  code = emit_store_var(code, arch, length_slot)
+  give 0
+}
+
+// Matching ] for a list index, including a nested index expression.
+make list_index_close(toks: str, open: num, tn: num) -> num {
+  hold depth = 0
+  hold i = open
+  while i < tn {
+    hold t = tok_at(toks, i)
+    when string_eq(t, "[") == 1 { depth = depth + 1 }
+    when string_eq(t, "]") == 1 {
+      depth = depth - 1
+      when depth == 0 { give i }
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
 // The one integer expression emitter. It leaves the result in the accumulator,
 // which is where every caller (numeric `hold`/assignment, `show`, a `when`/
 // `while` condition, `chr(<expression>)`, and the index of `s[i]`) expects it.
@@ -3914,7 +4209,8 @@ make emit_expression(extext: str) -> num {
               hold list_len_name = sub(list_len_tok, 1, len(list_len_tok))
               hold list_len_n = slot_of(listnames, list_len_name)
               when list_len_n > 0 {
-                code = emit_push_imm2(code, arch, list_len_n)
+                hold dynamic_len = slot_of(listnames, concat("#", list_len_name))
+                when dynamic_len >= 0 { code = emit_load_var(code, arch, dynamic_len) } otherwise { code = emit_push_imm2(code, arch, list_len_n) }
                 want = 0
                 k = k + 3
                 list_handled = 1
@@ -3922,31 +4218,42 @@ make emit_expression(extext: str) -> num {
             }
           }
         }
-        // NAME[<integer literal>]: an element of a numeric list literal.
+        // Fixed lists retain the literal-index fast path. A runtime index
+        // evaluates once, with the base and length safely on the value stack.
         when list_handled == 0 && slot_of(listnames, vname) > 0 {
           hold elem_n = slot_of(listnames, vname)
-          when k + 3 < tn && string_eq(tok_at(toks, k + 1), "[") == 1 {
-            when string_eq(tok_at(toks, k + 3), "]") == 0 || sx_index(tok_at(toks, k + 2), 0) != 110 {
-              hold dyn_list = fail(1, concat(concat("line ", numstr(lineno)), ": a list index must be an integer literal in native32 (a list is a fixed set of words)"))
-            }
-            hold elem_idx = tok_num(concat("n", sub(tok_at(toks, k + 2), 1, len(tok_at(toks, k + 2)))))
+          hold dynamic_len = slot_of(listnames, concat("#", vname))
+          when k + 1 >= tn || string_eq(tok_at(toks, k + 1), "[") == 0 {
+            hold whole_list = fail(1, concat(concat("line ", numstr(lineno)), ": a whole list is not a value in native32 (index it, or take len(...))"))
+          }
+          hold close = list_index_close(toks, k + 1, tn)
+          when close < 0 || close == k + 2 {
+            hold bad_list_index = fail(1, concat(concat("line ", numstr(lineno)), ": a list index needs a nonempty expression and closing ']'"))
+          }
+          hold eslot = slot_of(names, vname)
+          when eslot < 0 {
+            hold missing_list = fail(1, concat(concat("line ", numstr(lineno)), ": unknown list name"))
+          }
+          when dynamic_len < 0 && close == k + 3 && sx_index(tok_at(toks, k + 2), 0) == 110 {
+            hold elem_idx = tok_num(tok_at(toks, k + 2))
             when elem_idx >= elem_n {
               hold oob_list = fail(1, concat(concat("line ", numstr(lineno)), concat(concat(": list index ", numstr(elem_idx)), " is past the end of the list")))
             }
-            hold eslot = slot_of(names, vname)
-            when fn_active >= 0 {
-              eslot = eslot - 4 * elem_idx
-            } otherwise {
-              eslot = eslot + 4 * elem_idx
-            }
+            when fn_active >= 0 { eslot = eslot - 4 * elem_idx } otherwise { eslot = eslot + 4 * elem_idx }
             code = emit_load_var(code, arch, eslot)
-            want = 0
-            k = k + 3
-            list_handled = 1
+          } otherwise {
+            hold addr_done = emit_list_base(eslot)
+            when dynamic_len >= 0 { code = emit_load_var(code, arch, dynamic_len) } otherwise { code = emit_push_imm2(code, arch, elem_n) }
+            hold index_text = arg_token_text(toks, extext, k + 2, close)
+            hold index_done = emit_expression(index_text)
+            code = emit_push_acc(code, arch)
+            hold index_kind = 1
+            when fn_active >= 0 { index_kind = 2 }
+            hold read_done = emit_checked_index(index_kind)
           }
-          when k + 3 >= tn && list_handled == 0 {
-            hold whole_list = fail(1, concat(concat("line ", numstr(lineno)), ": a whole list is not a value in native32 (index it, or take len(...))"))
-          }
+          want = 0
+          k = close
+          list_handled = 1
         }
         hold is_len_call = 0
         when string_eq(vname, "len") == 1 && k + 3 < tn {
@@ -4162,98 +4469,7 @@ make emit_expression(extext: str) -> num {
         when close_index == 0 {
           hold unclosed_index = fail(1, concat(concat("line ", numstr(lineno)), ": a ']' with no '['"))
         }
-        when arch == 0 {
-          code = e1(code, 90)
-          code = e1(code, 89)
-          code = e1(code, 88)
-          code = e1(code, 133)
-          code = e1(code, 210)
-          code = e1(code, 15)
-          code = e1(code, 137)
-          hold neg_index_site = len(code)
-          code = e32(code, 0)
-          code = e1(code, 1)
-          code = e1(code, 202)
-          hold neg_index_done = len(code)
-          code = patch32(code, neg_index_site, neg_index_done - (neg_index_site + 4))
-          code = e1(code, 59)
-          code = e1(code, 209)
-          hold bad_index_site = len(code)
-          code = e1(code, 15)
-          code = e1(code, 131)
-          code = e32(code, 0)
-          code = e1(code, 15)
-          code = e1(code, 182)
-          code = e1(code, 4)
-          code = e1(code, 16)
-          code = e1(code, 80)
-          hold done_index_site = len(code)
-          code = e1(code, 233)
-          code = e32(code, 0)
-          hold bad_index = len(code)
-          code = e1(code, 184)
-          code = e32(code, 1)
-          code = e1(code, 187)
-          code = e32(code, 1)
-          code = e1(code, 205)
-          code = e1(code, 128)
-          hold done_index = len(code)
-          code = patch32(code, bad_index_site + 2, bad_index - (bad_index_site + 6))
-          code = patch32(code, done_index_site + 1, done_index - (done_index_site + 5))
-        } otherwise {
-          when arch == 1 {
-            code = emit_pop_acc(code, arch)
-            code = e_w(code, 2852127724)
-            code = emit_pop_acc(code, arch)
-            code = e_w(code, 2852127723)
-            code = emit_pop_acc(code, arch)
-            code = e_w(code, 2852127722)
-            code = e_w(code, 1895825823)
-            hold neg_a64_site = len(code)
-            code = e_w(code, 1409286154)
-            code = e_w(code, 185270668)
-            hold neg_a64_done = len(code)
-            code = a_imm19(code, neg_a64_site, neg_a64_done - neg_a64_site)
-            code = e_w(code, 1795883423)
-            hold bad_a64_site = len(code)
-            code = e_w(code, 1409286146)
-            code = e_w(code, 2332819786)
-            code = e_w(code, 960495936)
-            code = e_w(code, 4162785248)
-            hold done_a64_site = len(code)
-            code = e_w(code, 335544320)
-            hold bad_a64 = len(code)
-            code = a_movz(code, 1, 0, 1)
-            code = a_movz(code, 1, 8, 93)
-            code = e_w(code, 3556769793)
-            hold done_a64 = len(code)
-            code = a_imm19(code, bad_a64_site, bad_a64 - bad_a64_site)
-            code = a_imm26(code, done_a64_site, done_a64 - done_a64_site)
-          } otherwise {
-            code = rv_pop_reg(code, 12)
-            code = rv_pop_reg(code, 11)
-            code = rv_pop_reg(code, 10)
-            hold neg_rv_site = len(code)
-            code = e_w(code, rv_b_word(0, 0, 12, 5))
-            code = e_w(code, rv_r(0, 11, 12, 0, 12, 59))
-            hold neg_rv_done = len(code)
-            code = set_w(code, neg_rv_site, rv_b_word(neg_rv_done - neg_rv_site, 0, 12, 5))
-            hold bad_rv_site = len(code)
-            code = e_w(code, rv_b_word(0, 11, 12, 7))
-            code = e_w(code, rv_r(0, 12, 10, 0, 10, 51))
-            code = e_w(code, rv_i(0, 10, 4, 10, 3))
-            code = rv_push_a0(code)
-            hold done_rv_site = len(code)
-            code = e_w(code, rv_j_word(0, 0))
-            hold bad_rv = len(code)
-            code = e_w(code, rv_i(1, 0, 0, 10, 19))
-            code = e_w(code, rv_i(93, 0, 0, 17, 19))
-            code = e_w(code, 115)
-            hold done_rv = len(code)
-            code = set_w(code, bad_rv_site, rv_b_word(bad_rv - bad_rv_site, 11, 12, 7))
-            code = set_w(code, done_rv_site, rv_j_word(done_rv - done_rv_site, 0))
-          }
-        }
+        hold index_done = emit_checked_index(0)
         want = 0
       }
       when t0 == 111 {
@@ -4310,9 +4526,293 @@ make emit_expression(extext: str) -> num {
   give 0
 }
 
+// Each row is TYPE, a control-byte separator, and its packed field table.
+make struct_type_count() -> num {
+  hold i = 0
+  hold count = 0
+  while i < len(struct_defs) {
+    when sx_index(struct_defs, i) == 10 { count = count + 1 }
+    i = i + 1
+  }
+  give count
+}
+
+make struct_type_index(name: str) -> num {
+  hold i = 0
+  hold count = struct_type_count()
+  while i < count {
+    hold row = nth_field(struct_defs, i)
+    hold sep = find_byte(row, 1)
+    when sep >= 0 && string_eq(sub(row, 0, sep), name) == 1 { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make struct_type_row(index: num) -> str {
+  hold line = nth_field(struct_defs, index)
+  hold sep = find_byte(line, 1)
+  when sep < 0 { hold e = fail(1, "invalid internal struct definition") }
+  give sub(line, sep + 1, len(line))
+}
+
+make struct_field_count(row: str) -> num {
+  hold i = 0
+  hold count = 0
+  while i < len(row) {
+    when sx_index(row, i) == 61 { count = count + 1 }
+    i = i + 1
+  }
+  give count
+}
+
+// Register a declaration's field list. Only untyped, numeric fields are
+// lowered in this bounded slice. Duplicate names and oversized layouts fail.
+make register_struct(name: str, fields: str) -> num {
+  when struct_type_index(name) >= 0 { hold e = fail(1, "duplicate struct declaration") }
+  when struct_type_count() >= 32 { hold e = fail(1, "native32 accepts at most 32 struct types") }
+  hold row = ""
+  hold count = 0
+  hold i = 0
+  hold comma = 0
+  while i < len(fields) {
+    hold c = sx_index(fields, i)
+    when c == 32 || c == 9 || c == 13 {
+      i = i + 1
+    } otherwise {
+      when c == 44 {
+        when count == 0 || comma == 1 { hold e = fail(1, "empty struct field declaration") }
+        comma = 1
+        i = i + 1
+      } otherwise {
+      hold begin = i
+      while i < len(fields) && is_name_char(sx_index(fields, i)) == 1 { i = i + 1 }
+      hold field = sub(fields, begin, i)
+      when len(field) == 0 || (sx_index(field, 0) >= 48 && sx_index(field, 0) <= 57) { hold e = fail(1, "invalid struct field declaration") }
+      when slot_of(row, field) >= 0 { hold e = fail(1, "duplicate struct field") }
+      when count >= 32 { hold e = fail(1, "native32 accepts at most 32 fields per struct") }
+      row = concat(row, concat(concat(concat("|", field), "="), concat(numstr(count), "|")))
+      count = count + 1
+      comma = 0
+      }
+    }
+  }
+  when count == 0 { hold e = fail(1, "empty structs are not supported") }
+  struct_defs = concat(struct_defs, concat(concat(concat(name, chr(1)), row), "\n"))
+  give 0
+}
+
+// Read the field name at an ordinal from the packed |name=index| table.
+make struct_field_name(row: str, index: num) -> str {
+  hold i = 0
+  hold k = 0
+  while i < len(row) {
+    when sx_index(row, i) == 124 { i = i + 1 }
+    hold start = i
+    while i < len(row) && sx_index(row, i) != 61 { i = i + 1 }
+    hold field = sub(row, start, i)
+    while i < len(row) && sx_index(row, i) != 124 { i = i + 1 }
+    i = i + 1
+    when k == index { give field }
+    k = k + 1
+  }
+  give ""
+}
+
+// Block depth for the struct lift: ignore comments, strings and escapes so a
+// brace in text cannot hide a later top-level declaration.
+make struct_line_delta(line: str) -> num {
+  hold i = 0
+  hold quoted = 0
+  hold delta = 0
+  while i < len(line) {
+    hold c = sx_index(line, i)
+    when quoted == 1 {
+      when c == 92 && i + 1 < len(line) { i = i + 1 } otherwise {
+        when c == 34 { quoted = 0 }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < len(line) && sx_index(line, i + 1) == 47 { give delta }
+      when c == 34 { quoted = 1 }
+      when c == 123 { delta = delta + 1 }
+      when c == 125 { delta = delta - 1 }
+    }
+    i = i + 1
+  }
+  give delta
+}
+
+// Lift top-level struct declarations after make bodies have already been
+// removed, leaving one newline per original line for diagnostics.
+make lift_structs() -> str {
+  hold out = ""
+  hold pos = 0
+  hold collecting = 0
+  hold depth = 0
+  hold name = ""
+  hold fields = ""
+  while pos < len(src) {
+    hold start = pos
+    while pos < len(src) && sx_index(src, pos) != 10 { pos = pos + 1 }
+    hold raw = sub(src, start, pos)
+    pos = pos + 1
+    hold line = trim(raw)
+    hold piece = ""
+    hold decl = 0
+    when collecting == 0 && depth == 0 && starts(line, "struct ") == 1 {
+      hold tail = trim(sub(line, 7, len(line)))
+      name = first_word(tail)
+      when len(name) == 0 || (sx_index(name, 0) >= 48 && sx_index(name, 0) <= 57) { hold e = fail(1, "invalid struct name") }
+      tail = trim(sub(tail, len(name), len(tail)))
+      when starts(tail, chr(123)) == 0 { hold e = fail(1, "struct declaration needs '{'") }
+      piece = sub(tail, 1, len(tail))
+      collecting = 1
+      fields = ""
+      decl = 1
+    } otherwise {
+      when collecting == 1 { piece = line
+        decl = 1 }
+    }
+    when decl == 1 {
+      // Fields cannot contain string literals; strip line comments safely.
+      hold comment = 0 - 1
+      hold q = 0
+      while q + 1 < len(piece) && comment < 0 {
+        when sx_index(piece, q) == 47 && sx_index(piece, q + 1) == 47 { comment = q }
+        q = q + 1
+      }
+      when comment >= 0 { piece = sub(piece, 0, comment) }
+      hold close = find_byte(piece, 125)
+      when close >= 0 {
+        when len(trim(sub(piece, close + 1, len(piece)))) > 0 { hold e = fail(1, "unexpected text after struct declaration") }
+        fields = concat(fields, concat(sub(piece, 0, close), " "))
+        hold registered = register_struct(name, fields)
+        collecting = 0
+      } otherwise { fields = concat(fields, concat(piece, " ")) }
+      out = concat(out, "\n")
+    } otherwise {
+      out = concat(out, concat(raw, "\n"))
+      depth = depth + struct_line_delta(raw)
+    }
+  }
+  when collecting == 1 { hold e = fail(1, "unclosed struct declaration") }
+  give out
+}
+
+// Initialize an entire numeric struct, evaluating named or positional fields
+// left-to-right. The fields are made visible only after initialization finishes.
+make emit_struct_value(name: str, ti: num, text: str) -> num {
+  when slot_of(names, name) >= 0 || slot_of(listnames, concat("$", name)) >= 0 { hold e = fail(1, "struct name is already bound") }
+  when len(text) < 2 || sx_index(text, len(text) - 1) != 125 { hold e = fail(1, "struct value needs a closing '}'") }
+  hold row = struct_type_row(ti)
+  hold count = struct_field_count(row)
+  hold base = len(data)
+  when fn_active >= 0 {
+    base = fn_frame_mark - 4 * (fn_frame_words[fn_active] + 1)
+    fn_frame_words[fn_active] = fn_frame_words[fn_active] + count
+    when fn_frame_words[fn_active] > 60 { hold e = fail(1, "a make body keeps at most 60 words of locals in a frame") }
+  } otherwise { data = put_zeros(data, 4 * count) }
+  hold body = sub(text, 1, len(text) - 1)
+  hold seen = []
+  hold i = 0
+  while i < count { seen = push(seen, 0)
+    i = i + 1 }
+  hold pos = 0
+  hold supplied = 0
+  hold named = 0 - 1
+  while pos < len(body) {
+    hold end = list_element_end(body, pos)
+    hold part = trim(sub(body, pos, end))
+    when len(part) == 0 { hold e = fail(1, "empty struct field value") }
+    hold field = first_word(part)
+    hold rest = trim(sub(part, len(field), len(part)))
+    hold is_named = 0
+    when starts(rest, ":") == 1 { is_named = 1 }
+    when named < 0 { named = is_named }
+    when named != is_named { hold e = fail(1, "cannot mix named and positional struct fields") }
+    hold field_index = supplied
+    hold expr = part
+    when is_named == 1 {
+      field_index = slot_of(row, field)
+      expr = trim(sub(rest, 1, len(rest)))
+    }
+    when field_index < 0 || field_index >= count { hold e = fail(1, "unknown or extra struct field") }
+    when seen[field_index] == 1 { hold e = fail(1, "duplicate struct field value") }
+    when len(expr) == 0 { hold e = fail(1, "empty struct field value") }
+    seen[field_index] = 1
+    hold target = base + 4 * field_index
+    when fn_active >= 0 { target = base - 4 * field_index }
+    hold expression_done = emit_expression(expr)
+    code = emit_store_var(code, arch, target)
+    supplied = supplied + 1
+    pos = end + 1
+    when end < len(body) && len(trim(sub(body, pos, len(body)))) == 0 { hold e = fail(1, "empty struct field value") }
+  }
+  when supplied != count { hold e = fail(1, "struct value must initialize every field") }
+  i = 0
+  while i < count {
+    hold field = struct_field_name(row, i)
+    hold target = base + 4 * i
+    when fn_active >= 0 { target = base - 4 * i }
+    names = concat(names, concat(concat(concat("|", concat(concat(name, "."), field)), "="), concat(numstr(target), "|")))
+    i = i + 1
+  }
+  listnames = concat(listnames, concat(concat(concat("|$", name), "="), concat(numstr(ti), "|")))
+  give 0
+}
+
 // The statement walk over one program text. It is a function, not a block
 // inside run(), because a `make` body is walked by this same code: user
 // functions are emitted after the main program, each body separately.
+make is_empty_list_literal(text: str) -> num {
+  when len(text) < 2 { give 0 }
+  when sx_index(text, 0) != 91 || sx_index(text, len(text) - 1) != 93 { give 0 }
+  when len(trim(sub(text, 1, len(text) - 1))) == 0 { give 1 }
+  give 0
+}
+
+// Allocate an empty-origin list and initialize length at the declaration site.
+make emit_list_grow_init(nm: str, slot: num) -> num {
+  hold capacity = 16
+  hold length_slot = 0
+  when fn_active >= 0 {
+    fn_frame_words[fn_active] = fn_frame_words[fn_active] + capacity
+    when fn_frame_words[fn_active] > 60 { hold e = fail(1, "a make body keeps at most 60 words of locals in a frame") }
+    length_slot = slot - 4 * capacity
+  } otherwise {
+    data = put_zeros(data, 4 * (capacity - 1))
+    length_slot = len(data)
+    data = put_zeros(data, 4)
+  }
+  listnames = concat(listnames, concat(concat(concat("|", nm), "="), concat(numstr(capacity), "|")))
+  listnames = concat(listnames, concat(concat(concat("|#", nm), "="), concat(numstr(length_slot), "|")))
+  code = emit_push_imm2(code, arch, 0)
+  code = emit_pop_acc(code, arch)
+  code = emit_store_var(code, arch, length_slot)
+  give 0
+}
+
+make emit_list_set(word: str, tail: str) -> num {
+  hold close = list_target_close(tail)
+  when close < 2 { hold e = fail(1, concat(concat("line ", numstr(lineno)), ": a list assignment needs a nonempty index and closing ']'")) }
+  hold rest = trim(sub(tail, close + 1, len(tail)))
+  when starts(rest, "=") == 0 || starts(rest, "==") == 1 { hold e = fail(1, concat(concat("line ", numstr(lineno)), ": a list assignment needs '='")) }
+  hold index_text = trim(sub(tail, 1, close))
+  hold value_text = trim(sub(rest, 1, len(rest)))
+  when len(index_text) == 0 || len(value_text) == 0 { hold e = fail(1, concat(concat("line ", numstr(lineno)), ": a list assignment needs an index and value")) }
+  hold base_done = emit_list_base(slot_of(names, word))
+  hold dynamic_len = slot_of(listnames, concat("#", word))
+  when dynamic_len >= 0 { code = emit_load_var(code, arch, dynamic_len) } otherwise { code = emit_push_imm2(code, arch, slot_of(listnames, word)) }
+  hold index_done = emit_expression(index_text)
+  code = emit_push_acc(code, arch)
+  hold kind = 3
+  when fn_active >= 0 { kind = 4 }
+  hold checked = emit_checked_index(kind)
+  hold value_done = emit_expression(value_text)
+  hold store_done = emit_store_indexed()
+  give 0
+}
+
 make emit_statements() -> num {
   hold n = len(src)
   hold pos = 0
@@ -4362,6 +4862,18 @@ make emit_statements() -> num {
           hold badhold = fail(1, concat(concat("line ", numstr(lineno)), ": a `hold` needs a name and a single `=`"))
         }
         extext = trim(sub(after, 1, len(after)))
+        hold st_name = first_word(extext)
+        hold st_index = struct_type_index(st_name)
+        hold st_tail = trim(sub(extext, len(st_name), len(extext)))
+        when st_index >= 0 && starts(st_tail, chr(123)) == 1 {
+          hold struct_done = emit_struct_value(nm, st_index, st_tail)
+          extext = ""
+          act = 19
+        }
+        when act == 0 {
+        when slot_of(listnames, concat("$", nm)) >= 0 {
+          hold struct_rebind = fail(1, concat(concat("line ", numstr(lineno)), ": rebinding a struct is not supported"))
+        }
         hold istext = 0
         hold isconcat_hold = 0
         hold isalias_hold = 0
@@ -4413,6 +4925,9 @@ make emit_statements() -> num {
           }
         }
         slot = slot_of(names, nm)
+        when slot >= 0 && (slot_of(listnames, nm) > 0 || (len(extext) > 0 && sx_index(extext, 0) == 91)) {
+          hold list_rebind = fail(1, concat(concat("line ", numstr(lineno)), ": rebinding a fixed list or changing a variable to a list is not supported"))
+        }
         when slot < 0 {
           when fn_active >= 0 {
             // A body local lives in the current frame, below the frame base.
@@ -4450,11 +4965,15 @@ make emit_statements() -> num {
           chr_has = 1
           act = 13
         }
-        // A numeric list literal: `hold xs = [7, 8, 9]`. The language has no
-        // element assignment, so every element can be written into the data
-        // segment at compile time and the declaration emits no code at all.
-        // A read with a literal index is one variable load at base + 4*index,
-        // and len(xs) is a constant.
+        when act == 0 && is_empty_list_literal(extext) == 1 {
+          hold init_grow = emit_list_grow_init(nm, slot)
+          extext = ""
+          act = 19
+        }
+        // A numeric list literal: `hold xs = [7, 8, 9]`.
+        // Top-level literal elements outside blocks are baked into the data
+        // image; computed, block-local and frame elements initialize at runtime.
+        // A literal-index read is a single load and len is constant.
         when act == 0 && len(extext) > 0 && sx_index(extext, 0) == 91 {
           when sx_index(extext, len(extext) - 1) != 93 {
             hold bad_list_close = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal must end with ']' and hold integer literals"))
@@ -4464,8 +4983,7 @@ make emit_statements() -> num {
           hold lel = 0
           hold li = 0
           while li < ln {
-            hold lj = li
-            while lj < ln && sx_index(lb, lj) != 44 { lj = lj + 1 }
+            hold lj = list_element_end(lb, li)
             hold piece = trim(sub(lb, li, lj))
             // A signed element is `-` and digits; it is stored as the 32-bit
             // two's complement word, which is what the signed print path reads.
@@ -4507,8 +5025,7 @@ make emit_statements() -> num {
           hold lk = 0
           li = 0
           while li < ln {
-            hold lj2 = li
-            while lj2 < ln && sx_index(lb, lj2) != 44 { lj2 = lj2 + 1 }
+            hold lj2 = list_element_end(lb, li)
             hold eltext = trim(sub(lb, li, lj2))
             hold elneg = 0
             hold elmag2 = eltext
@@ -4525,7 +5042,7 @@ make emit_statements() -> num {
               when elneg == 1 {
                 lelv = 4294967296 - lelv
               }
-              when fn_active >= 0 {
+              when fn_active >= 0 || bdepth > 0 {
                 code = emit_push_imm2(code, arch, lelv)
                 code = emit_pop_acc(code, arch)
                 code = emit_store_var(code, arch, eslot)
@@ -4568,6 +5085,7 @@ make emit_statements() -> num {
               act = 1
             }
           }
+        }
         }
       }
       when act == 0 && starts(line, "show ") == 1 {
@@ -4643,10 +5161,46 @@ make emit_statements() -> num {
         extext = trim(sub(line, 6, len(line) - 1))
         act = 8
       }
+      when act == 0 && starts(line, "push(") == 1 {
+        hold append_done = emit_list_append(line, "")
+        act = 19
+      }
       when act == 0 && len(word) > 0 {
         hold tail = trim(sub(line, len(word), len(line)))
-        when starts(tail, "=") == 1 && starts(tail, "==") == 0 {
+        when slot_of(listnames, word) > 0 && starts(tail, "[") == 1 {
+          hold set_done = emit_list_set(word, tail)
+          act = 19
+        }
+        // A numeric struct field is an ordinary word slot, with the same
+        // frame/global store path as a numeric variable. Whole-struct assignment
+        // remains a refusal; this supports only field = numeric expression.
+        when slot_of(listnames, concat("$", word)) >= 0 && starts(tail, ".") == 1 {
+          hold field_tail = trim(sub(tail, 1, len(tail)))
+          hold field = first_word(field_tail)
+          hold rest = trim(sub(field_tail, len(field), len(field_tail)))
+          when len(field) == 0 || starts(rest, "=") == 0 || starts(rest, "==") == 1 {
+            hold bad_field_assign = fail(1, concat(concat("line ", numstr(lineno)), ": expected a numeric struct field assignment"))
+          }
+          slot = slot_of(names, concat(concat(word, "."), field))
+          when slot < 0 { hold bad_field = fail(1, concat(concat("line ", numstr(lineno)), ": unknown struct field")) }
+          extext = trim(sub(rest, 1, len(rest)))
+          act = 1
+        }
+        when act == 0 && starts(tail, "=") == 1 && starts(tail, "==") == 0 {
+          hold rhs = trim(sub(tail, 1, len(tail)))
+          when starts(rhs, "push(") == 1 && slot_of(listnames, word) > 0 {
+            hold append_done = emit_list_append(rhs, word)
+            act = 19
+          }
+        }
+        when act == 0 && starts(tail, "=") == 1 && starts(tail, "==") == 0 {
           slot = slot_of(names, word)
+          when slot_of(listnames, concat("$", word)) >= 0 {
+            hold assign_struct = fail(1, concat(concat("line ", numstr(lineno)), ": struct assignment is not supported"))
+          }
+          when slot_of(listnames, word) > 0 {
+            hold list_assign = fail(1, concat(concat("line ", numstr(lineno)), ": assignment to a fixed list is not supported"))
+          }
           when slot < 0 {
             hold badname = fail(1, concat(concat(concat("line ", numstr(lineno)), ": assignment to an unknown name '"), concat(word, "' (declare it with `hold` first)")))
           }
@@ -5264,6 +5818,7 @@ make run() -> num {
   lineno = 0
   hold main_only = lift_functions()
   src = main_only
+  src = lift_structs()
   lineno = 0
   hold em_walk = emit_statements()
   when fn_count > 0 {
@@ -5327,6 +5882,8 @@ make run() -> num {
       fn_off[fi] = len(code)
       hold saved_names = names
       hold saved_strnames = strnames
+      hold saved_listnames = listnames
+      listnames = ""
       names = body_parm_names(nth_field(fn_paramtbl, fi), fn_arity[fi], nth_field(fn_ptypetbl, fi), fi)
       strnames = sp_names
       fn_active = fi
@@ -5362,6 +5919,7 @@ make run() -> num {
       fn_active = 0 - 1
       names = saved_names
       strnames = saved_strnames
+      listnames = saved_listnames
       fi = fi + 1
     }
     code = patch_jmp(code, arch, fn_skip, len(code))

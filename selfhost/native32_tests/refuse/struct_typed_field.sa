@@ -1,0 +1,2 @@
+struct Point { x: num }
+show 1

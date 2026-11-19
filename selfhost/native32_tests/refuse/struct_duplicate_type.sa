@@ -1,0 +1,3 @@
+struct Point { x }
+struct Point { y }
+show 1

@@ -1,0 +1,18 @@
+// Negative/nested write indices and repeated block-local initialization.
+hold xs = [10, 20, 30]
+hold keys = [2, 0, 1]
+xs[keys[0]] = 4
+xs[0 - 3] = 5
+xs[0 - 1] = 9
+show xs[0]
+show xs[1]
+show xs[2]
+hold i = 0
+hold total = 0
+while i < 3 {
+  hold local = [7, 8]
+  total = total + local[0]
+  local[0] = 99
+  i = i + 1
+}
+show total

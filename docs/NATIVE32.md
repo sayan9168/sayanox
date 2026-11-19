@@ -12,7 +12,8 @@ executed by the pure-Sayanox user-mode emulator `tools/sxisaexec.sa` on the
 x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
 
 ```sh
-./sx target native32 sxisaexec
+./sx tool native32
+./sx tool sxisaexec
 ./tools/native32 selfhost/native32_tests/strings.sa /tmp/strings.rv64 riscv64
 ./tools/sxisaexec --arch riscv64 --out /tmp/strings.out /tmp/strings.rv64
 ```
@@ -146,10 +147,10 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   the refusal matrix is 63 (`refuse/streq_in_body.sa` became a legal program and
   was deleted, its forms moved into `streq_body`).
 
-- **Numeric list literals** (2026-11-17, step 15): the first aggregate slice.
+- **Numeric list literals** (2026-11-17, step 15; historical, runtime
+  indexing and body lists below supersede the original restrictions): the first aggregate slice.
   `hold xs = [7, 8, 9]` writes the elements into the data segment at compile
-  time (the language has no element assignment, so no store is ever emitted for
-  the declaration), `xs[<integer literal>]` lowers to one variable load at
+  time (this initial subset had no element assignment), `xs[<integer literal>]` lowers to one variable load at
   `base + 4*index`, and `len(xs)` pushes the element count as an immediate.
   Indices are compile-time checked against that count, so `xs[2]` on a
   two-element list is a refusal rather than a fault, and a runtime index is
@@ -344,6 +345,66 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   call, a `-> str` result assigned to a numeric variable, a num-returning call as
   a `concat` operand, and any parameter or result type other than `num`/`str`.
 
+**Bounded numeric structs** (2026-11-19, local increment): declarations such
+as `struct Point { x, y }` may be inline or multiline. A `hold` may initialize
+all fields positionally or by name, with integer expressions; `p.x` reads a
+field in arithmetic, conditions and indices; `p.x = <integer expression>`
+updates a numeric field. Global fields occupy data words;
+function-local fields occupy per-invocation frame words, so recursive calls do
+not share their locals. At most 32 types and 32 fields per type are accepted,
+and body fields count against the existing 60-word frame cap. Empty, duplicate,
+missing, extra, mixed positional/named and invalid fields are refused. Whole
+struct values and whole-struct assignment, strings/lists/nested structs as
+fields, generics, and typed fields are not implemented by this subset. Numeric
+field mutation agrees with seed-min and gen2, but native_aot and the full
+native compiler currently refuse that statement form. Initializers
+with reordered named fields or compound field expressions run in the seed and
+native32 fixtures, but gen2 and native_aot reject some of them; the shared
+`struct_num` fixture sticks to their common subset. These differences are not
+full struct parity.
+
+**Bounded empty-origin numeric list growth** (2026-11-19, local increment):
+`hold xs = []` (also `[ ]`) reserves 16 numeric element words and a runtime
+length word. `push(xs, VALUE)` and `xs = push(xs, VALUE)` append one numeric
+expression; `len(xs)`, checked reads, and indexed writes use the live length.
+The seventeenth append and an index outside the live length exit 1. The list
+is reset at each declaration execution and local storage belongs to the call
+frame (17 words of the 60-word frame budget). Value expressions run once;
+negative indices count from the end. General dynamic allocation, growth beyond
+16 elements, aliases, list parameters/returns, whole-list copying or rebinding,
+and pushing into nonempty literal lists are not supported. The common fixture
+has an independent oracle and runs across the reference and native ISA lanes;
+a separate fixture tests frame recursion, declaration reset, maximum capacity,
+negative indexing and side effects. The full x86-64 compilers currently fault
+on negative list indices; those tests use the C reference lanes instead.
+
+**Fixed-list element assignment** (2026-11-19, local increment):
+`xs[INDEX] = VALUE` checks the integer index, then stores the numeric value
+into the existing fixed-size list on i386, AArch64 and RV64IM. The index is
+evaluated once, negative indices count from the end, and local lists remain
+per-frame under recursion. Each execution of a block-local list declaration
+reinitializes its literal elements, including on loop iterations. Bounds faults
+exit 1. The common positive fixture agrees with seed-min, gen2 and the full
+x86-64 compiler; the bounded native_aot profile refuses list assignment. The
+full x86-64 compiler currently faults on negative list indices, and seed/gen2
+cannot emit some nested-index assignment forms, so those cases have separate
+oracles and only the applicable reference lanes. At this stage whole-list rebinding,
+aliases, `push`/growth and empty lists were unsupported; see the increment above.
+
+**Fixed-list runtime indices** (2026-11-19, local increment): an index is
+computed once and bounds-checked, with negative values counting from the end.
+Global lists grow upward in the data image; function-local lists grow downward
+in each call frame, including under recursion. Runtime bounds faults exit 1;
+literal positive out-of-range indices remain compile-time refusals. The list
+name table is now scoped per function, fixing a miscompile when functions use
+the same list name with different lengths. Rebinding an existing list or
+turning an existing numeric variable into a list is refused rather than
+potentially overwriting other slots. This remains fixed-size, not a growing
+list implementation. Seed-min and gen2 accept negative list indices, but both
+x86-64 native compilers currently exit on them; therefore the negative-index
+fixtures compare against the C lanes and independent expected output, not the
+x86-64 lane. The shared nonnegative fixture runs across all lanes.
+
 Numeric **list literals** are supported in a bounded form:
 `hold xs = [7, 8, 9]` stores the elements in the data segment, `xs[<integer
 literal>]` is one variable load at base + 4*index, and `len(xs)` is the
@@ -353,13 +414,21 @@ is compiled where the list is declared and stored through the same slot path;
 note that v1 lists are numeric only -- the published backends refuse
 `hold names = ["ab", "cd"]` with *list elements must be numbers*, so string
 elements are not a missing native32 feature),
-the index must
-be an integer literal (a runtime index is refused), an index at or past the end
-is refused, and an empty list is refused. A list literal also works inside a
+calls with multiple arguments and nested calls are also accepted as numeric
+elements (commas inside a call are not element separators). The scanner also
+keeps commas and escaped quotes within string literals together for supported
+numeric forms such as `len("a,b")`; the seed grammar rejects that particular
+form. An index may be an integer expression, including nested indexing and
+calls; negative values count from the end. A positive literal past the end is a
+compile-time refusal; runtime out-of-range values exit 1. Empty-origin lists
+have the separate bounded growth support documented above; general rebinding and
+aliases are not supported. A list literal also works inside a
 `make` body: the elements live below the frame base, grow downward from the
 reserved word and are stored at run time, so a body list costs one frame word
-per element against the same 60-word budget. The language has no element assignment, so nothing has to be mutable
-and the declaration emits no code at all. Structs, floating-point expressions,
+per element against the same 60-word budget. Top-level literal elements are
+placed in the data image; computed elements and body-local elements emit runtime
+initialization. General dynamic lists and whole-list rebinding remain unsupported by native32.
+Structs are limited to the numeric subset above; floating-point expressions,
 general file APIs, and garbage collection remain unsupported by this compiler;
 recursion
 is supported but capped at 64 live frames, so an unbounded recurrence is a
@@ -509,7 +578,7 @@ and runtime support. Bounded `concat` and byte indexing extend the original
 integer/static-string backend, but do not complete that roadmap item. General
 string operations beyond the documented subset (nested `chr`, `show concat(...)`
 nested `concat` operands, and `len(concat(...))` are now lowered; concat in
-other expression positions is not), lists, structs,
+other expression positions is not), general dynamically allocated lists, general structs,
 IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
 remain open, along with broader ISA support and end-to-end parity for each. Do not count
 emulator-only FP/syscall probes as compiler support.

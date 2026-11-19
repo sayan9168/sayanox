@@ -1,0 +1,17 @@
+// Numeric field mutation is supported in the C-output lanes and native32.
+struct Point { x, y }
+make recur(n: num) -> num {
+  hold p = Point { n, 2 }
+  p.x = p.x + p.y
+  when n == 0 {
+    give p.x
+  }
+  hold more = recur(n - 1)
+  give p.x + more
+}
+hold p = Point { 4, 7 }
+p.x = p.y + 3
+p.y = p.x * 2
+show p.x
+show p.y
+show recur(3)
