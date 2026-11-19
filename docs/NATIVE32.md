@@ -191,6 +191,20 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   output equal to the x86-64 native AOT lane). Every pre-existing fixture keeps
   its exact size and golden and the refusal matrix stays 64.
 
+- **Literal-or-expression list elements** (2026-11-17, step 18): an element no
+  longer has to be an integer literal. Anything that is not a literal is
+  compiled as an integer expression where the list is declared and stored
+  through the slot path a literal uses, so `hold xs = [n, n + 1, n * 2]` works
+  inside a body and `hold top = [k, k * k, k - 10]` works at top level, with the
+  same literal fast path (data word or immediate) still used for constants and
+  the data image still zero-initialized, which keeps the data segment
+  arch-neutral. The new `list_expr` fixture covers two body lists built from
+  parameters, a negative computed element and a top-level list built from a
+  variable, and agrees on the six execution paths (i386 8252 bytes, reviewed
+  AArch64/RV64IM goldens, arch-neutral data image, output equal to the x86-64
+  native AOT lane). Every pre-existing fixture keeps its exact size and golden
+  and the refusal matrix stays 64.
+
 - **String equality** (2026-11-01): `string_eq(A, B)` where each argument is a
   declared string variable, a quoted literal or a whole `chr(X)` value. It is a numeric expression that
   yields `1` or `0`, so it can drive `when` and `while` conditions, feed `show`,
@@ -333,8 +347,10 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
 Numeric **list literals** are supported in a bounded form:
 `hold xs = [7, 8, 9]` stores the elements in the data segment, `xs[<integer
 literal>]` is one variable load at base + 4*index, and `len(xs)` is the
-compile-time element count. Elements are signed integer literals only (a negative element is stored as its
-32-bit two's complement word, which the signed print path reads back), the index must
+compile-time element count. An element is a signed integer literal or an ordinary integer expression (a
+literal is baked into the data segment or pushed as an immediate; anything else
+is compiled where the list is declared and stored through the same slot path),
+the index must
 be an integer literal (a runtime index is refused), an index at or past the end
 is refused, and an empty list is refused. A list literal also works inside a
 `make` body: the elements live below the frame base, grow downward from the

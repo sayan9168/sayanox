@@ -1,0 +1,22 @@
+// Non-literal list elements. An element that is not an integer literal is an
+// ordinary integer expression: it is compiled where the list is declared and
+// stored through the same slot path a literal uses, so a list can be built from
+// variables and arithmetic, at top level or inside a body.
+make calc(n: num) -> num {
+  hold xs = [n, n + 1, n * 2]
+  give xs[0] + xs[1] + xs[2]
+}
+make spread(a: num, b: num) -> num {
+  hold xs = [a - b, a + b, a * b]
+  give xs[2] - xs[0] + xs[1]
+}
+show calc(5)
+show calc(0)
+show spread(6, 2)
+hold k = 3
+hold top = [k, k * k, k - 10]
+show top[0]
+show top[1]
+show top[2]
+show top[0] + top[2]
+show len(top)
