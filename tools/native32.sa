@@ -4470,13 +4470,15 @@ make emit_statements() -> num {
             // A signed element is `-` and digits; it is stored as the 32-bit
             // two's complement word, which is what the signed print path reads.
             hold pmag = piece
+            hold plit = all_digits(piece)
             when len(piece) > 1 && sx_index(piece, 0) == 45 {
               pmag = trim(sub(piece, 1, len(piece)))
+              plit = all_digits(pmag)
             }
-            when all_digits(pmag) == 0 {
-              hold bad_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list literal takes integer literals only in native32"))
+            when len(piece) == 0 {
+              hold empty_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": an empty list element"))
             }
-            when tok_num(concat("n", pmag)) > 2147483647 {
+            when plit == 1 && tok_num(concat("n", pmag)) > 2147483647 {
               hold big_list_el = fail(1, concat(concat("line ", numstr(lineno)), ": a list element of 2^31 or more"))
             }
             lel = lel + 1
@@ -4509,20 +4511,35 @@ make emit_statements() -> num {
             while lj2 < ln && sx_index(lb, lj2) != 44 { lj2 = lj2 + 1 }
             hold eltext = trim(sub(lb, li, lj2))
             hold elneg = 0
+            hold elmag2 = eltext
             when len(eltext) > 1 && sx_index(eltext, 0) == 45 {
               elneg = 1
-              eltext = trim(sub(eltext, 1, len(eltext)))
+              elmag2 = trim(sub(eltext, 1, len(eltext)))
             }
-            hold lelv = tok_num(concat("n", eltext))
-            when elneg == 1 {
-              lelv = 4294967296 - lelv
-            }
+            hold eslot = lslot + 4 * lk
             when fn_active >= 0 {
-              code = emit_push_imm2(code, arch, lelv)
-              code = emit_pop_acc(code, arch)
-              code = emit_store_var(code, arch, lslot - 4 * lk)
+              eslot = lslot - 4 * lk
+            }
+            when all_digits(elmag2) == 1 {
+              hold lelv = tok_num(concat("n", elmag2))
+              when elneg == 1 {
+                lelv = 4294967296 - lelv
+              }
+              when fn_active >= 0 {
+                code = emit_push_imm2(code, arch, lelv)
+                code = emit_pop_acc(code, arch)
+                code = emit_store_var(code, arch, eslot)
+              } otherwise {
+                data = set_u32(data, eslot, lelv)
+              }
             } otherwise {
-              data = set_u32(data, lslot + 4 * lk, lelv)
+              // A non-literal element is an ordinary integer expression: it is
+              // compiled here and stored through the same slot path, so a list
+              // may be built from variables and arithmetic in a body or at top
+              // level. The data words stay zero in the image either way, which
+              // keeps the data segment arch-neutral.
+              hold el_done = emit_expression(eltext)
+              code = emit_store_var(code, arch, eslot)
             }
             lk = lk + 1
             li = lj2 + 1
