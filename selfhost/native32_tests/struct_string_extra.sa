@@ -1,0 +1,13 @@
+// A string field can initialize another instance at top level and in a frame.
+struct Row { n, text }
+make copy(v: str) -> str {
+  hold p = Row { 7, v }
+  hold q = Row { 8, p.text }
+  give q.text
+}
+hold a = Row { 1, "alpha" }
+hold b = Row { 2, a.text }
+show b.text
+show len(b.text)
+show copy("delta")
+show b.n

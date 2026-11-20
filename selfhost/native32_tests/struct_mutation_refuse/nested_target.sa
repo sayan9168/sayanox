@@ -1,0 +1,4 @@
+struct Point { x }
+struct Outer { inner }
+hold p = Outer { Point { 1 } }
+p.inner.x = 2

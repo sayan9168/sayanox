@@ -1,0 +1,15 @@
+// Independently calculated byte values for direct and held field indexes.
+struct Row { n, text }
+make pick(n: num) -> num {
+  hold p = Row { 3, "alpha" }
+  hold v = p.text[n]
+  give v
+}
+hold a = Row { 2, "beta" }
+show a.text[1]
+hold k = 2
+hold x = a.text[k]
+show x
+show a.text[0] + 1
+show pick(4)
+show len(a.text)

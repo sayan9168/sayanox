@@ -1,0 +1,7 @@
+// A string field remains frame-local as the recursion limit is reached.
+struct Row { text }
+make down(n: num) -> num {
+  hold a = Row { "x" }
+  give down(n + len(a.text))
+}
+show down(0)

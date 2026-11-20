@@ -2455,6 +2455,54 @@ make emit_fn(src: str, st: list, pool: list, est: list, data: list, lp_st: list,
   give est
 }
 
+// Assign one numeric field of an existing struct variable. The object pointer
+// stays on the stack across RHS evaluation, including calls and allocation.
+// Parameters and nested targets remain outside this bounded slice.
+make emit_numeric_field_store(src: str, st: list, pool: list, est: list, data: list, name: str) -> list {
+  hold sn = st[1]
+  hold neg1 = 0 - 1
+  when st[5] >= 0 {
+    hold fb = f_base(st[5])
+    hold i = 0
+    while i < st[fb + 1] {
+      hold pn = fn_pn_slot(fb, i)
+      when pool_eq(pool, st[pn], name) == 1 {
+        hold ep = fail(1, "field assignment to a parameter is not supported")
+      }
+      i = i + 1
+    }
+  }
+  hold gi = g_find(st, pool, name)
+  when gi < 0 { hold e0 = fail(1, "field assignment requires a bound struct variable") }
+  hold gb = g_base(gi)
+  when st[gb + 1] != 3 || st[gb + 2] < 0 {
+    hold e1 = fail(1, "field assignment requires a struct variable")
+  }
+  hold sid = st[gb + 2]
+  hold sb = s_base(sid)
+  st[0] = st[0] + 1
+  hold field = pid_st(src, st)
+  when len(field) == 0 { hold e2 = fail(1, "expected a field name after .") }
+  hold fi = s_field(st, pool, sid, field)
+  when fi < 0 { hold e3 = fail(1, "unknown struct field in assignment") }
+  when st[sb + 52 + fi] == 0 || st[sb + 20 + fi] != 0 {
+    hold e4 = fail(1, "field assignment requires a resolved numeric field")
+  }
+  hold z = sw_st(src, st)
+  when at(src, sn, st[0]) != 61 || at(src, sn, st[0] + 1) == 61 {
+    hold e5 = fail(1, "expected = after struct field")
+  }
+  st[0] = st[0] + 1
+  est = load_global_em(est, st, gi)
+  est = push_r(est, 0)
+  est = emit_rhs(src, st, pool, est, data)
+  when st[30] != 0 { hold e6 = fail(1, "numeric struct field requires a numeric value") }
+  est = pop_r(est, 1)
+  est = mv_m64(est, 1, neg1, 0, 8 * fi, 0)
+  hold end = endstmt_st(src, st)
+  give est
+}
+
 make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num, stop: num) -> list {
   hold neg1 = 0 - 1
   hold sn = st[1]
@@ -2727,6 +2775,9 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
         hold w = pid_raw_st(src, st)
         hold zw2 = sw_st(src, st)
         hold q2 = st[0]
+        when len(w) > 0 && at(src, sn, q2) == 46 {
+          est = emit_numeric_field_store(src, st, pool, est, data, w)
+        } otherwise {
         when len(w) > 0 && at(src, sn, q2) == 61 && at(src, sn, q2 + 1) != 61 {
           hold gi_a = g_find(st, pool, w)
           hold pi_a = 0 - 1
@@ -2919,6 +2970,7 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
               }
             }
           }
+        }
         }
       }
     }

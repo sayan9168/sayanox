@@ -1,0 +1,8 @@
+// The 65th recursive native32 frame must exit 1 with no output.
+struct Point { x }
+make down(n: num) -> num {
+  hold p = Point { n }
+  p.x = p.x + 1
+  give down(p.x)
+}
+show down(0)

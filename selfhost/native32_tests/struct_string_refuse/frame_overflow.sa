@@ -1,0 +1,7 @@
+// Twenty-one string fields require 63 frame words; the limit is 60.
+struct Wide { a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u }
+make check() -> num {
+  hold v = Wide { "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u" }
+  give len(v.a)
+}
+show check()

@@ -97,7 +97,7 @@ make xc_containers(d: str, arch: str) -> num {
       show "[SKIP] kernel cannot execute i386; deterministic containers and all byte assertions still run"
     }
   }
-  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nlist_neg\nlist_expr\nlist_call\nlist_index\nstruct_num\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
+  hold names = "expr\nflow\ntext\nstrcopy\nstreq\nstreq_expr\nstreq_body\nlist_num\nlist_body\nlist_neg\nlist_expr\nlist_call\nlist_index\nstruct_num\nstruct_string\nstruct_mutation\nstruct_mutation_scope\nchr\nchr_nested\nconcat_expr\nchr_expr\nfn\nrecursion\nstrfn\nstrrec\nstrarity\n"
   hold pos = 0
   while pos < len(names) {
     hold start = pos
@@ -134,6 +134,9 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "list_call") == 1 { expected = 8248 }
       when string_eq(name, "list_index") == 1 { expected = 8268 }
       when string_eq(name, "struct_num") == 1 { expected = 8271 }
+      when string_eq(name, "struct_string") == 1 { expected = 8323 }
+      when string_eq(name, "struct_mutation") == 1 { expected = 8244 }
+      when string_eq(name, "struct_mutation_scope") == 1 { expected = 8252 }
       when string_eq(name, "chr") == 1 { expected = 8358 }
       when string_eq(name, "chr_nested") == 1 { expected = 8534 }
       when string_eq(name, "concat_expr") == 1 { expected = 8590 }
@@ -146,7 +149,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold size = gl_assert_eq_num(path_size(file), expected, "reviewed i386 image size")
       hold cdir = kp_join(d, name)
       hold oracle = xq_parity_unknown(source, cdir)
-      when string_eq(name, "list_call") == 1 || string_eq(name, "list_index") == 1 || string_eq(name, "struct_num") == 1 {
+      when string_eq(name, "list_call") == 1 || string_eq(name, "list_index") == 1 || string_eq(name, "struct_num") == 1 || string_eq(name, "struct_string") == 1 || string_eq(name, "struct_mutation") == 1 || string_eq(name, "struct_mutation_scope") == 1 {
         hold reviewed = gl_assert_files_eq(kp_join("selfhost/native32_tests", concat(name, ".want")), kp_join(cdir, "seed.out"), "list independent oracle")
       }
       hold nat_magic = xc_hex(kp_join(cdir, "native"), 0, "7f454c4602010100")
@@ -160,7 +163,7 @@ make xc_containers(d: str, arch: str) -> num {
   }
   // List writes are outside the native_aot profile. Still require deterministic
   // images, cross-ISA data equality, and an independent i386 output oracle.
-  hold writes = "list_set\nlist_set_extra\nlist_set_negative\nlist_set_nested\nlist_set_reset\nlist_grow\nlist_grow_extra\n"
+  hold writes = "list_set\nlist_set_extra\nlist_set_negative\nlist_set_nested\nlist_set_reset\nlist_grow\nlist_grow_extra\nstruct_string_frame\nstruct_string_extra\nstruct_string_index\n"
   hold wi = 0
   while wi < len(writes) {
     hold begin = wi
@@ -176,13 +179,15 @@ make xc_containers(d: str, arch: str) -> num {
     when string_eq(arch, "i386") == 0 {
       build = pg_command(xc_command(source, kp_join(d, "write-i386.elf"), "i386"), "list write alternate encoder")
       hold data = xc_data(image, kp_join(d, "write-i386.elf"))
-      when string_eq(name, "list_set") == 1 || string_eq(name, "list_grow") == 1 {
+      when string_eq(name, "list_set") == 1 || string_eq(name, "list_grow") == 1 || string_eq(name, "struct_string_index") == 1 || string_eq(name, "struct_string_extra") == 1 {
         hold golden = kp_join("selfhost/native32_tests/golden", concat(name, concat(".", concat(arch, ".elf"))))
         equal = gl_assert_files_eq(image, golden, "list write machine-code golden")
       }
     } otherwise {
       when string_eq(name, "list_set") == 1 { hold size = gl_assert_eq_num(path_size(image), 8268, "list write i386 image size") }
       when string_eq(name, "list_grow") == 1 { hold size = gl_assert_eq_num(path_size(image), 8296, "growing list i386 image size") }
+      when string_eq(name, "struct_string_index") == 1 { hold size = gl_assert_eq_num(path_size(image), 8287, "struct string index i386 image size") }
+      when string_eq(name, "struct_string_extra") == 1 { hold size = gl_assert_eq_num(path_size(image), 8328, "struct string selector initializer i386 image size") }
       when can_run == 1 {
         hold executable = xb_publish(image)
         hold run = pg_capture(gl_sh_quote(image), kp_join(d, "list-write.out"))
@@ -191,6 +196,9 @@ make xc_containers(d: str, arch: str) -> num {
     }
   }
   hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 103)
+  hold struct_refusals = xc_refusals("selfhost/native32_tests/struct_mutation_refuse", d, arch, 0, 6)
+  hold string_struct_refusals = xc_refusals("selfhost/native32_tests/struct_string_refuse", d, arch, 0, 9)
+  hold string_init_refusals = xc_refusals("selfhost/native32_tests/struct_string_initializer_refuse", d, arch, 0, 3)
   hold literal_len_source = "selfhost/native32_tests/len_literals.sa"
   hold literal_len_file = kp_join(d, "len-literals.elf")
   hold literal_len_build = pg_command(xc_command(literal_len_source, literal_len_file, arch), "literal len compile")
@@ -214,7 +222,7 @@ make xc_containers(d: str, arch: str) -> num {
       hold run = pg_capture(gl_sh_quote(kp_join(d, "legal")), kp_join(d, "legal.out"))
       when string_eq(name, "division") == 1 { hold value = kp_eq(d, "legal.out", "3.5\n") }
     }
-    names = "heap_exhaust\nstring_index_oob\nlist_index_oob_high\nlist_index_oob_low\nlist_set_oob_high\nlist_set_oob_low\nlist_grow_capacity\nlist_grow_oob\nlist_grow_oob_low\nlist_grow_set_oob\nfn_depth_cap\nstr_depth_cap\n"
+    names = "heap_exhaust\nstring_index_oob\nlist_index_oob_high\nlist_index_oob_low\nlist_set_oob_high\nlist_set_oob_low\nlist_grow_capacity\nlist_grow_oob\nlist_grow_oob_low\nlist_grow_set_oob\nfn_depth_cap\nstr_depth_cap\nstruct_mutation_depth_cap\nstruct_string_depth_cap\n"
     pos = 0
     while pos < len(names) {
       hold start = pos

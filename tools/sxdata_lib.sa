@@ -666,6 +666,11 @@ make endstmt_st(src: str, st: list) -> num {
       st[0] = saved
       give 0
     }
+    // The emitter validates the complete field-assignment target and value.
+    when c2 == 46 {
+      st[0] = saved
+      give 0
+    }
     when c2 == 40 && string_eq(w, "push") == 1 {
       st[0] = saved
       give 0

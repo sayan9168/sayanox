@@ -17,7 +17,7 @@ make rt_lsp_client(name: str) -> str {
 }
 
 make rt_known(name: str) -> num {
-  when string_eq(name, "test-driver") == 1 { give 1 }
+  when string_eq(name, "test-driver") == 1 || string_eq(name, "test-struct-mutation") == 1 || string_eq(name, "test-struct-string") == 1 { give 1 }
   when len(rt_suite(name)) > 0 || len(rt_lsp_client(name)) > 0 { give 1 }
   when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 || string_eq(name, "test-release-identity") == 1 {
     give 1
@@ -108,7 +108,7 @@ make rt_run(name: str, built: list) -> num {
   }
   hold runner = "sxc_native_test"
   hold folder = "selfhost/seed_tests/sxc_native_gate"
-  when string_eq(name, "test-sxisaexec") == 1 {
+  when string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-struct-mutation") == 1 || string_eq(name, "test-struct-string") == 1 {
     hold a = target_native_tool("sxisaexec")
     hold b = target_native_tool("native32")
     hold c = target_native_tool("sxirexec")
@@ -125,5 +125,7 @@ make rt_run(name: str, built: list) -> num {
   hold tool = target_native_tool(runner)
   hold dir = gl_clean_dir(folder)
   hold cmd = concat(concat("./tools/", runner), " ")
-  give target_run(concat(cmd, sh_quote(folder)), name)
+  cmd = concat(cmd, sh_quote(folder))
+  when string_eq(name, "test-struct-mutation") == 1 || string_eq(name, "test-struct-string") == 1 { cmd = concat(cmd, " --require-i386") }
+  give target_run(cmd, name)
 }

@@ -1,0 +1,4 @@
+struct Row { n, text }
+hold a = Row { 1, "first" }
+hold b = Row { 2, 3 }
+show 1

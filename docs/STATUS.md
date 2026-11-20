@@ -1,5 +1,84 @@
 # Status
 
+**2026-11-19 local R02 increment: string-field initializer parity**
+
+A bounded change allows `Row { ..., a.text }` in gen2 and defers unresolved
+string-field types during x86-64 inference until the strict pass. Numeric
+selector initializers remain a separate documented refusal. The expanded
+independent oracle covers top-level and function-local copies; unknown fields,
+wrong kinds and non-struct selectors have explicit refusal fixtures. The
+native compiler was rebuilt at a compiler2/compiler3 fixed point with unchanged
+688128-byte size; this is not independent trust evidence. Acceptance for this
+increment passed fresh `true-selfhost`, `gen3`, `test-struct-string`,
+`test-native32`, `test-native-arm64`, `test-native-riscv64`, `test-sxisaexec`,
+`test-native-sxinfer` and `test-generic-structs` gates, with the mandatory i386,
+IR and full-native oracles. Repeatable i386 images have a pinned size of 8328
+bytes and ARM/RV goldens are checked. Full CI for this increment is pending.
+
+Before this change, the fresh local `./sx ci` for the string-index increment
+completed successfully, including published-language v1 acceptance. This does
+not establish remote guarded CI or full native parity.
+
+**2026-11-19 local R02 increment: string-field byte indexing**
+
+The seed and gen2 C emitters now use the typed postfix walker for string-field
+indexes, including `hold` and `show`; previously `show` silently discarded the
+index and `hold` was refused. The independent byte oracle exercises variables,
+arithmetic and a function-local index on seed, gen2, both x86-64 compilers, the
+IR VM and all three native32 ISAs. Wrong-type and unclosed indices are refused; high and low bounds faults exit 1
+without output. The native32 expression parser now also rejects an unmatched
+opening bracket.
+Repeatable i386 images have a pinned size and ARM/RV images have goldens. The
+C lanes also passed a local nested-field index probe; nested native32 structs
+remain unsupported. The string-index-specific, native32 ISA and sxisaexec gates
+passed locally; the bootstrap passed true-selfhost and gen3 with this C-emitter
+change. Full parity is not established.
+
+Before this indexing increment, fresh local `./sx ci` completed successfully,
+including the published-language v1 acceptance chain. This is local evidence
+for that earlier source state, not guarded remote CI or acceptance of later
+changes. Full guarded CI remains required for R02.
+
+**2026-11-19 local R02 increment: bounded string struct fields**
+
+The i386, AArch64 and RV64IM emitter accepts string literals or existing string
+values in untyped struct fields, alongside numeric fields. Fields may be read,
+shown, copied or used in `len`/`string_eq`; layouts and recursive frames are
+bounded and a field's inferred kind must agree across instances. Assignment to
+string fields and computed string initializers remain refused. Seven new
+refusals include kind mismatch, wrong operands, unsupported writes/expressions
+and the 60-word frame cap; the former string-field refusal now checks numeric
+misuse instead. The shared fixture has an independent oracle across seed-min,
+gen2, native AOT, full native, IR VM and all three native32 targets. The
+20-string-field frame boundary agrees with seed and native32. `test-struct-string`,
+the three ISA gates and `test-native-sxdefs` passed locally, including repeatable
+images and ARM/RV goldens.
+
+At this checkpoint, gen2 and x86-64 still rejected a string field selector
+as another field's initializer. The later increment above addresses that bounded form. Full structs and R02 remain open.
+
+**2026-11-19 local R02 increment: numeric struct field-assignment parity**
+
+The x86-64 native AOT and full native compilers now accept numeric field writes
+on bound struct variables, including function-local recursive values and RHS
+calls; struct-parameter and nested-target writes remain refused. The existing
+`struct_mutation` and new `struct_mutation_scope` independent oracles agree
+across seed-min, gen2, native AOT, full native, IR VM, i386, AArch64 and
+RV64IM. Six explicit refusal fixtures run on both x86-64 profiles and all
+three native32 targets; recursive frame isolation and the native32 64-frame
+fault are tested. Deterministic ISA images, i386 sizes and new ARM/RV goldens
+are gated. `test-struct-mutation` requires i386 execution instead of silently
+skipping it. That gate, the three ISA gates, `test-native-sxdefs`, and
+`test-native-sxemit` passed locally. The local `./sx ci` run passed
+`true-selfhost`, `gen3` and `native-test`, but failed the final published-language
+contract integrity check: seven reviewed-source hashes did not match. The
+`tools/native32.sa` pin was already stale in the branch base. The affected
+source pins have been refreshed; the later full local CI passed as noted above. The native anchor was
+source-rebuilt at an identical compiler2/compiler3 fixed point and its size is
+unchanged; this is not an independent trust proof. Full guarded CI and the
+remaining struct features are not established by this increment. R02 remains
+open.
+
 **2026-11-19 local R02 increment: bounded growing numeric lists**
 
 Empty-origin numeric lists now support runtime length and checked `push`, reads
@@ -29,8 +108,9 @@ Numeric struct declarations, field initializers, reads and assignments lower to 
 words for i386, AArch64 and RV64IM, including recursive function-local values.
 The shared fixture agrees with seed-min, gen2, native AOT, the portable IR VM,
 and the three native32 targets; an additional seed/native32 fixture covers
-forms currently rejected by gen2/native AOT. Field assignment agrees with the
-seed and gen2 but is refused by the x86-64 native compilers. Twenty-two new malformed and bound
+forms currently rejected by gen2/native AOT. At that stage, field assignment agreed with the
+seed and gen2 but was refused by the x86-64 native compilers; the increment
+above resolves the bounded numeric-variable case. Twenty-two new malformed and bound
 refusals run per ISA. The ISA gates, `test-sxisaexec` and `test-native-sxdefs`
 passed locally. General struct semantics and the rest of R02 remain open;
 complete guarded CI has not been run.

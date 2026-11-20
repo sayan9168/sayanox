@@ -1,0 +1,24 @@
+// Independent instances, RHS calls and one local struct per recursive frame.
+struct Point { x, y }
+make bump(n: num) -> num {
+  hold t = Point { n, 1 }
+  give t.x + t.y
+}
+make total(n: num) -> num {
+  hold p = Point { n, 2 }
+  p.x = bump(p.x) + p.y
+  when n == 0 {
+    give p.x
+  }
+  hold rest = total(n - 1)
+  give p.x + rest
+}
+hold a = Point { 2, 3 }
+hold b = Point { 8, 9 }
+a.x = bump(a.y)
+b.y = a.x + 5
+show a.x
+show a.y
+show b.x
+show b.y
+show total(3)

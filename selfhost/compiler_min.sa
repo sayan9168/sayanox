@@ -8868,9 +8868,9 @@ while running == 1 {
                       when ec == 40 {
                         hold flmore = 1
                       }
-                      // The seed accepted field/index expressions in literals;
-                      // retain the later mini-compiler profile's refusal.
-                      when seed_profile == 1 && (flnc == 46 || flnc == 91) {
+                      // Keep the existing numeric field/index refusal in
+                      // gen2, but accept a typed string selector as seed does.
+                      when (seed_profile == 1 || sx_eq(flkind, "s") == 1) && (flnc == 46 || flnc == 91) {
                         hold flmore = 1
                       }
                       when flmore == 1 {
@@ -11356,10 +11356,10 @@ hold ec = 0
             }
           }
           // a struct result cannot enter a + - * / % chain
-          // A field-list postfix is reparsed from its original base.  The
-          // legacy walker consumes the dotted selectors first, so this keeps
-          // `p.xs[i]` in the typed list path instead of leaving '[' behind.
-          when chn >= 1 && rk == 2 {
+          // A string/list field postfix is reparsed from its original base.
+          // The typed expression walker checks the index and emits the
+          // appropriate runtime operation after dotted selectors.
+          when chn >= 1 && (rk == 2 || rk == 1) {
             hold sk = 1
             while sk == 1 {
               when pos >= n {
@@ -11395,6 +11395,8 @@ hold ec = 0
               hold flvalue = sxeparse(source, fieldbaseat, flenv, 7, 0, instate)
               hold flkind = sxesegment(flvalue, 1)
               when sx_eq(flkind, "n") == 1 {
+                when rk == 1 { hold rt = 1 }
+
                 hold rhs = sxecode(flvalue)
                 hold pos = sxepos(flvalue)
                 hold rk = 0
@@ -11403,8 +11405,10 @@ hold ec = 0
                 hold perr = 1
                 when sx_eq(flkind, "e") == 1 {
                   hold permsg = concat("list-field index: ", sxecode(flvalue))
+                  when rk == 1 { hold permsg = concat("string-field index: ", sxecode(flvalue)) }
                 } otherwise {
                   hold permsg = "list-field index must produce a number"
+                  when rk == 1 { hold permsg = "string-field index must produce a number" }
                 }
               }
             }
@@ -14381,10 +14385,10 @@ hold argbracket = 0
             }
           }
           // a struct result cannot enter a + - * / % chain
-          // A field-list postfix is reparsed from its original base.  The
-          // legacy walker consumes the dotted selectors first, so this keeps
-          // `p.xs[i]` in the typed list path instead of leaving '[' behind.
-          when chn >= 1 && rk == 2 {
+          // A string/list field postfix is reparsed from its original base.
+          // The typed expression walker checks the index and emits the
+          // appropriate runtime operation after dotted selectors.
+          when chn >= 1 && (rk == 2 || rk == 1) {
             hold sk = 1
             while sk == 1 {
               when pos >= n {
@@ -14420,6 +14424,8 @@ hold argbracket = 0
               hold flvalue = sxeparse(source, fieldbaseat, flenv, 7, 0, instate)
               hold flkind = sxesegment(flvalue, 1)
               when sx_eq(flkind, "n") == 1 {
+                when rk == 1 { hold rt = 1 }
+
                 hold rhs = sxecode(flvalue)
                 hold pos = sxepos(flvalue)
                 hold rk = 0
@@ -14428,8 +14434,10 @@ hold argbracket = 0
                 hold perr = 1
                 when sx_eq(flkind, "e") == 1 {
                   hold permsg = concat("list-field index: ", sxecode(flvalue))
+                  when rk == 1 { hold permsg = concat("string-field index: ", sxecode(flvalue)) }
                 } otherwise {
                   hold permsg = "list-field index must produce a number"
+                  when rk == 1 { hold permsg = "string-field index must produce a number" }
                 }
               }
             }

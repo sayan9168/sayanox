@@ -1,0 +1,4 @@
+struct Row { text }
+hold a = Row { "first" }
+hold b = Row { a.missing }
+show b.text
