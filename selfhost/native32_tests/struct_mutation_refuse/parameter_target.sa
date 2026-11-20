@@ -1,0 +1,7 @@
+struct Point { x }
+make change(p: Point) -> num {
+  p.x = 2
+  give p.x
+}
+hold a = Point { 1 }
+show change(a)

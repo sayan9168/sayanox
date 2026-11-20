@@ -19,8 +19,9 @@
 // Sayanox runtime. It supports static strings, len, byte indexing, a bounded
 // bump-heap concat, and functions with per-depth call frames whose parameters
 // and results may be numbers or strings; numeric list literals are bounded to
-// fixed words with checked runtime indices (below), plus bounded numeric
-// structs. It has no collector, general file API, or floating-point code. Unsupported forms are
+// fixed words with checked runtime indices (below), plus bounded structs with
+// numeric fields and literal/copied string fields. It has no collector, general
+// file API, or floating-point code. Unsupported forms are
 // refused with a diagnostic and non-zero exit.
 //
 // The subset, exactly:
@@ -4490,7 +4491,7 @@ make emit_expression(extext: str) -> num {
           when depth == 0 {
             more = 0
           } otherwise {
-            when ops[depth - 1] == 0 {
+            when ops[depth - 1] == 0 || ops[depth - 1] == 0 - 1 {
               more = 0
             } otherwise {
               when op_prec(ops[depth - 1]) >= pr {
@@ -4519,6 +4520,9 @@ make emit_expression(extext: str) -> num {
       depth = depth - 1
       when ops[depth] == 0 {
         hold openleft = fail(1, concat(concat("line ", numstr(lineno)), ": a '(' with no ')'"))
+      }
+      when ops[depth] == 0 - 1 {
+        hold openindex = fail(1, concat(concat("line ", numstr(lineno)), ": a '[' with no ']'"))
       }
       code = emit_op2(code, arch, ops[depth])
     }
@@ -4566,8 +4570,8 @@ make struct_field_count(row: str) -> num {
   give count
 }
 
-// Register a declaration's field list. Only untyped, numeric fields are
-// lowered in this bounded slice. Duplicate names and oversized layouts fail.
+// Register an untyped declaration's field list; field kinds are inferred from
+// initialized values. Duplicate names and oversized layouts fail.
 make register_struct(name: str, fields: str) -> num {
   when struct_type_index(name) >= 0 { hold e = fail(1, "duplicate struct declaration") }
   when struct_type_count() >= 32 { hold e = fail(1, "native32 accepts at most 32 struct types") }
@@ -4617,6 +4621,43 @@ make struct_field_name(row: str, index: num) -> str {
     k = k + 1
   }
   give ""
+}
+
+// Store an inferred kind in the packed field ordinal: 0 unknown, 1 numeric,
+// 2 string. Encoding it above the five ordinal bits needs no new global table.
+make struct_field_set_kind(ti: num, field_index: num, kind: num) -> num {
+  hold oldrow = struct_type_row(ti)
+  hold count = struct_field_count(oldrow)
+  hold field = struct_field_name(oldrow, field_index)
+  hold encoded = slot_of(oldrow, field)
+  hold oldkind = (encoded - encoded % 32) / 32
+  when oldkind != 0 && oldkind != kind {
+    hold bad = fail(1, "a struct field cannot have different types across values")
+  }
+  when oldkind == kind { give 0 }
+  hold newrow = ""
+  hold i = 0
+  while i < count {
+    hold name = struct_field_name(oldrow, i)
+    hold old = slot_of(oldrow, name)
+    when i == field_index { old = field_index + 32 * kind }
+    newrow = concat(newrow, concat(concat(concat("|", name), "="), concat(numstr(old), "|")))
+    i = i + 1
+  }
+  hold result = ""
+  hold types = struct_type_count()
+  i = 0
+  while i < types {
+    hold line = nth_field(struct_defs, i)
+    when i == ti {
+      hold sep = find_byte(line, 1)
+      line = concat(concat(sub(line, 0, sep), chr(1)), newrow)
+    }
+    result = concat(result, concat(line, "\n"))
+    i = i + 1
+  }
+  struct_defs = result
+  give 0
 }
 
 // Block depth for the struct lift: ignore comments, strings and escapes so a
@@ -4699,8 +4740,9 @@ make lift_structs() -> str {
   give out
 }
 
-// Initialize an entire numeric struct, evaluating named or positional fields
-// left-to-right. The fields are made visible only after initialization finishes.
+// Initialize a numeric/string struct, evaluating named or positional fields
+// left-to-right. String fields accept literals and existing string values; their
+// pairs use additional slots. Fields become visible only after initialization.
 make emit_struct_value(name: str, ti: num, text: str) -> num {
   when slot_of(names, name) >= 0 || slot_of(listnames, concat("$", name)) >= 0 { hold e = fail(1, "struct name is already bound") }
   when len(text) < 2 || sx_index(text, len(text) - 1) != 125 { hold e = fail(1, "struct value needs a closing '}'") }
@@ -4714,9 +4756,15 @@ make emit_struct_value(name: str, ti: num, text: str) -> num {
   } otherwise { data = put_zeros(data, 4 * count) }
   hold body = sub(text, 1, len(text) - 1)
   hold seen = []
+  hold targets = []
+  hold string_fields = []
   hold i = 0
-  while i < count { seen = push(seen, 0)
-    i = i + 1 }
+  while i < count {
+    seen = push(seen, 0)
+    targets = push(targets, 0)
+    string_fields = push(string_fields, 0)
+    i = i + 1
+  }
   hold pos = 0
   hold supplied = 0
   hold named = 0 - 1
@@ -4734,6 +4782,7 @@ make emit_struct_value(name: str, ti: num, text: str) -> num {
     hold expr = part
     when is_named == 1 {
       field_index = slot_of(row, field)
+      when field_index >= 0 { field_index = field_index % 32 }
       expr = trim(sub(rest, 1, len(rest)))
     }
     when field_index < 0 || field_index >= count { hold e = fail(1, "unknown or extra struct field") }
@@ -4742,8 +4791,25 @@ make emit_struct_value(name: str, ti: num, text: str) -> num {
     seen[field_index] = 1
     hold target = base + 4 * field_index
     when fn_active >= 0 { target = base - 4 * field_index }
-    hold expression_done = emit_expression(expr)
-    code = emit_store_var(code, arch, target)
+    hold is_string = 0
+    when is_text_literal(expr) == 1 || slot_of(strnames, expr) >= 0 { is_string = 1 }
+    hold recorded = struct_field_set_kind(ti, field_index, 1 + is_string)
+    when is_string == 1 {
+      target = temp_pair_slot()
+      hold pair = materialize_str_value(expr)
+      hold off = 0
+      while off < 8 {
+        hold loaded = push_pair_field(pair, off)
+        code = emit_pop_acc(code, arch)
+        code = emit_store_var(code, arch, target + off)
+        off = off + 4
+      }
+      string_fields[field_index] = 1
+    } otherwise {
+      hold expression_done = emit_expression(expr)
+      code = emit_store_var(code, arch, target)
+    }
+    targets[field_index] = target
     supplied = supplied + 1
     pos = end + 1
     when end < len(body) && len(trim(sub(body, pos, len(body)))) == 0 { hold e = fail(1, "empty struct field value") }
@@ -4752,9 +4818,12 @@ make emit_struct_value(name: str, ti: num, text: str) -> num {
   i = 0
   while i < count {
     hold field = struct_field_name(row, i)
-    hold target = base + 4 * i
-    when fn_active >= 0 { target = base - 4 * i }
-    names = concat(names, concat(concat(concat("|", concat(concat(name, "."), field)), "="), concat(numstr(target), "|")))
+    hold target = targets[i]
+    hold full_name = concat(concat(name, "."), field)
+    names = concat(names, concat(concat(concat("|", full_name), "="), concat(numstr(target), "|")))
+    when string_fields[i] == 1 {
+      strnames = concat(strnames, concat(concat(concat("|", full_name), "=1"), "|"))
+    }
     i = i + 1
   }
   listnames = concat(listnames, concat(concat(concat("|$", name), "="), concat(numstr(ti), "|")))
@@ -5181,8 +5250,10 @@ make emit_statements() -> num {
           when len(field) == 0 || starts(rest, "=") == 0 || starts(rest, "==") == 1 {
             hold bad_field_assign = fail(1, concat(concat("line ", numstr(lineno)), ": expected a numeric struct field assignment"))
           }
-          slot = slot_of(names, concat(concat(word, "."), field))
+          hold field_name = concat(concat(word, "."), field)
+          slot = slot_of(names, field_name)
           when slot < 0 { hold bad_field = fail(1, concat(concat("line ", numstr(lineno)), ": unknown struct field")) }
+          when slot_of(strnames, field_name) >= 0 { hold bad_string_field = fail(1, "assignment to a string struct field is not supported") }
           extext = trim(sub(rest, 1, len(rest)))
           act = 1
         }

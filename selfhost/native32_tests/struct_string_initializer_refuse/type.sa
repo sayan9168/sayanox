@@ -1,0 +1,6 @@
+struct Row { text }
+struct Other { n }
+hold a = Other { 3 }
+hold b = Row { "ok" }
+hold c = Row { a.n }
+show c.text

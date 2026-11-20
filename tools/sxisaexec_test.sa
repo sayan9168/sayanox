@@ -221,17 +221,74 @@ make verify_two_reference(dir: str, name: str) -> num {
   give assert_files_eq(want, out, "negative list gen2 oracle")
 }
 
-// The seed accepts reordered named and compound numeric struct expressions;
-// gen2 and native_aot currently refuse several of these forms.
-make verify_struct_extra_seed(dir: str) -> num {
-  hold source = "selfhost/native32_tests/struct_extra.sa"
+// Seed-only reference for forms the other shared profiles do not all accept.
+make verify_struct_extra_seed(dir: str, name: str) -> num {
+  hold source = concat("selfhost/native32_tests/", concat(name, ".sa"))
   hold cfile = concat(dir, "/struct-extra.seed.c")
   hold exe = concat(dir, "/struct-extra.seed")
   hold out = concat(dir, "/struct-extra.seed.out")
   when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(source), concat(" > ", sh_q(cfile))))) != 0 { hold f = fail_t("struct extra seed emit") }
   when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(cfile)))))) != 0 { hold f = fail_t("struct extra seed C build") }
   when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("struct extra seed execution") }
-  give assert_files_eq("selfhost/native32_tests/struct_extra.want", out, "struct extra seed oracle")
+  give assert_files_eq(concat("selfhost/native32_tests/", concat(name, ".want")), out, "struct extra seed oracle")
+}
+
+// String-field indexing must match the independent byte oracle in all lanes.
+make verify_struct_string_index_refs(dir: str) -> num {
+  hold source = "selfhost/native32_tests/struct_string_index.sa"
+  hold want = "selfhost/native32_tests/struct_string_index.want"
+  hold out = concat(dir, "/struct-index.out")
+  hold cfile = concat(dir, "/struct-index.c")
+  hold exe = concat(dir, "/struct-index.exe")
+  when run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(source), concat(" > ", sh_q(cfile))))) != 0 { hold f = fail_t("struct string index seed emit") }
+  when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(cfile)))))) != 0 { hold f = fail_t("struct string index seed C") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("struct string index seed run") }
+  hold seed = assert_files_eq(want, out, "seed field index oracle")
+  when run_command(concat("./selfhost/gen2 ", concat(sh_q(source), concat(" ", sh_q(cfile))))) != 0 { hold f = fail_t("struct string index gen2 emit") }
+  when run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", sh_q(cfile)))))) != 0 { hold f = fail_t("struct string index gen2 C") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("struct string index gen2 run") }
+  hold gen2 = assert_files_eq(want, out, "gen2 field index oracle")
+  when run_command(concat("./selfhost/native_aot ", concat(sh_q(source), concat(" ", sh_q(exe))))) != 0 { hold f = fail_t("struct string index native emit") }
+  when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("struct string index native run") }
+  hold native = assert_files_eq(want, out, "struct string index x86 oracle")
+  when run_command(concat("./tools/sxirexec compile-and-run ", concat(sh_q(source), concat(" ", concat(sh_q(concat(dir, "/struct-index-ir")), concat(" > ", sh_q(out))))))) != 0 { hold f = fail_t("struct string index IR run") }
+  give assert_files_eq(want, out, "struct string index IR oracle")
+}
+
+// Reject invalid struct expressions, including C-output lanes whose generated
+// #error is reported by the C compiler rather than the emitter.
+make verify_struct_expr_refusals(dir: str, folder: str, names: str, expected: num) -> num {
+  hold p = 0
+  hold count = 0
+  while p < len(names) {
+    hold name = ""
+    while p < len(names) && sx_index(names, p) != 10 {
+      name = concat(name, chr(sx_index(names, p)))
+      p = p + 1
+    }
+    p = p + 1
+    hold source = concat(folder, concat("/", concat(name, ".sa")))
+    hold err = concat(dir, "/index-refusal.err")
+    hold cfile = concat(dir, "/index-refusal.c")
+    hold exe = concat(dir, "/index-refusal.elf")
+    hold seed = run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(source), concat(" >", concat(sh_q(cfile), concat(" 2>", sh_q(err)))))))
+    hold sr = assert_eq_num(seed, 1, concat(name, " seed refusal"))
+    when len(read_file(err)) == 0 { hold f = fail_t("missing seed index diagnostic") }
+    hold gen = run_command(concat("./selfhost/gen2 ", concat(sh_q(source), concat(" ", concat(sh_q(cfile), concat(" >", concat(sh_q(err), " 2>&1")))))))
+    hold cstatus = run_command(concat(cc_bin(), concat(" -std=gnu11 -o ", concat(sh_q(exe), concat(" ", concat(sh_q(cfile), " >/dev/null 2>&1"))))))
+    when cstatus == 0 { hold f = fail_t(concat(name, " gen2 accepted invalid index")) }
+    hold i = 0
+    while i < 2 {
+      hold compiler = "./selfhost/native_aot "
+      when i == 1 { compiler = "./tools/sxc_native " }
+      hold status = run_command(concat(compiler, concat(sh_q(source), concat(" ", concat(sh_q(exe), concat(" >", concat(sh_q(err), " 2>&1")))))))
+      hold refused = assert_eq_num(status, 1, concat(name, " native refusal"))
+      when len(read_file(err)) == 0 { hold f = fail_t("missing native index diagnostic") }
+      i = i + 1
+    }
+    count = count + 1
+  }
+  give assert_eq_num(count, expected, "struct expression refusal count")
 }
 
 // The full native compiler supports positive indexed assignment, unlike the
@@ -244,6 +301,35 @@ make verify_list_set_full_native(dir: str, name: str) -> num {
   when run_command(concat("./bootstrap/sxc_native.bin ", concat(sh_q(source), concat(" ", sh_q(exe))))) != 0 { hold f = fail_t("full native list write compilation") }
   when run_command(concat(sh_q(exe), concat(" > ", sh_q(out)))) != 0 { hold f = fail_t("full native list write execution") }
   give assert_files_eq(want, out, "full native list write oracle")
+}
+
+// Refusals for the new x86-64 numeric-field store, tested on both profiles.
+make verify_struct_store_refusals(dir: str) -> num {
+  hold names = "unknown_field\nnon_struct\nwrong_value_type\nmalformed_target\nnested_target\nparameter_target\n"
+  hold p = 0
+  hold count = 0
+  while p < len(names) {
+    hold name = ""
+    while p < len(names) && sx_index(names, p) != 10 {
+      name = concat(name, chr(sx_index(names, p)))
+      p = p + 1
+    }
+    p = p + 1
+    hold source = concat("selfhost/native32_tests/struct_mutation_refuse/", concat(name, ".sa"))
+    hold i = 0
+    while i < 2 {
+      hold compiler = "./selfhost/native_aot "
+      when i == 1 { compiler = "./tools/sxc_native " }
+      hold err = concat(dir, "/struct-refusal.err")
+      hold cmd = concat(compiler, concat(sh_q(source), concat(" ", concat(sh_q(concat(dir, "/struct-refusal.elf")), concat(" >", concat(sh_q(err), " 2>&1"))))))
+      hold status = run_command(cmd)
+      hold refused = assert_eq_num(status, 1, concat("struct store refusal: ", name))
+      when len(read_file(err)) == 0 { hold f = fail_t(concat("struct store refusal lacks diagnostic: ", name)) }
+      i = i + 1
+    }
+    count = count + 1
+  }
+  give assert_eq_num(count, 6, "struct store refusal count")
 }
 
 make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden_riscv64: str) -> num {
@@ -294,6 +380,11 @@ make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden
   hold cx = assert_files_eq(ref_out, x64_out, concat(name, " seed vs x86_64 native_aot"))
 
   // 4. Portable IR VM (sxirexec) + sxc_native + i386 (when host runs IA32)
+  when arg_count() > 2 && string_eq(arg(2), "--require-i386") == 1 && (string_eq(name, "struct_mutation") == 1 || string_eq(name, "struct_mutation_scope") == 1 || string_eq(name, "struct_string") == 1) {
+    when path_kind("./tools/sxirexec") != 1 || path_kind("./tools/sxc_native") != 1 {
+      hold fm = fail_t("struct mutation gate requires IR VM and full native compiler")
+    }
+  }
   when path_kind("./tools/sxirexec") == 1 {
     hold ir_wd = concat(stem, "_ir_wd")
     when run_command(concat("./tools/sxirexec compile-and-run ", concat(sh_q(sa_path), concat(" ", concat(sh_q(ir_wd), concat(" > ", sh_q(ir_out))))))) != 0 {
@@ -317,8 +408,13 @@ make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden
   when run_command(concat("./tools/native32 ", concat(sh_q(sa_path), concat(" ", concat(sh_q(i386_elf), " i386"))))) != 0 {
     hold f32 = fail_t(concat(name, ": native32 i386 failed"))
   }
-  when run_command(concat("chmod +x ", concat(sh_q(i386_elf), concat(" && ", concat(sh_q(i386_elf), concat(" > ", concat(sh_q(i386_out), " 2>/dev/null"))))))) == 0 {
+  hold i386_status = run_command(concat("chmod +x ", concat(sh_q(i386_elf), concat(" && ", concat(sh_q(i386_elf), concat(" > ", concat(sh_q(i386_out), " 2>/dev/null")))))))
+  when i386_status == 0 {
     hold c32 = assert_files_eq(ref_out, i386_out, concat(name, " seed vs i386 ELF32"))
+  } otherwise {
+    when arg_count() > 2 && string_eq(arg(2), "--require-i386") == 1 && (string_eq(name, "struct_mutation") == 1 || string_eq(name, "struct_mutation_scope") == 1 || string_eq(name, "struct_string") == 1) {
+      hold f32run = fail_t(concat(name, ": i386 execution required by struct mutation gate"))
+    }
   }
 
   // 5. AArch64 ELF64 via native32 arm64 AND tracked golden (when provided) executed by sxisaexec!
@@ -1116,9 +1212,23 @@ hold vlist_extra = verify_native_only_list(dir, "list_index_extra")
 hold vlist_negative = verify_native_only_list(dir, "list_index_negative")
 hold vlist_negative_refs = verify_two_reference(dir, "list_index_negative")
 hold vstruct_extra = verify_native_only_list(dir, "struct_extra")
-hold vstruct_seed = verify_struct_extra_seed(dir)
-hold vstruct_mutation = verify_native_only_list(dir, "struct_mutation")
-hold vstruct_mutation_refs = verify_two_reference(dir, "struct_mutation")
+hold vstruct_seed = verify_struct_extra_seed(dir, "struct_extra")
+hold vstruct_string_extra = verify_native_only_list(dir, "struct_string_extra")
+hold vstruct_string_extra_parity = verify_six_way(dir, "struct_string_extra", "selfhost/native32_tests/struct_string_extra.sa", "", "")
+hold vstruct_string_extra_oracle = assert_files_eq("selfhost/native32_tests/struct_string_extra.want", concat(dir, "/struct_string_extra.seed.out"), "string selector field initializer oracle")
+hold vstruct_string_extra_full = verify_list_set_full_native(dir, "struct_string_extra")
+hold vstruct_string_frame = verify_native_only_list(dir, "struct_string_frame")
+hold vstruct_string_frame_seed = verify_struct_extra_seed(dir, "struct_string_frame")
+hold vstruct_string_index = verify_native_only_list(dir, "struct_string_index")
+hold vstruct_string_index_full = verify_list_set_full_native(dir, "struct_string_index")
+hold vstruct_string_index_refs = verify_struct_string_index_refs(dir)
+hold vstruct_index_refusals = verify_struct_expr_refusals(dir, "selfhost/native32_tests/struct_string_refuse", "index_type\nunclosed_index\n", 2)
+hold vstruct_initializer_refusals = verify_struct_expr_refusals(dir, "selfhost/native32_tests/struct_string_initializer_refuse", "type\nunknown\nnonstruct\n", 3)
+hold vstruct_mutation = verify_six_way(dir, "struct_mutation", "selfhost/native32_tests/struct_mutation.sa", "selfhost/native32_tests/golden/struct_mutation.arm64.elf", "selfhost/native32_tests/golden/struct_mutation.riscv64.elf")
+hold vstruct_mutation_oracle = assert_files_eq("selfhost/native32_tests/struct_mutation.want", concat(dir, "/struct_mutation.seed.out"), "struct mutation independent oracle")
+hold vstruct_scope = verify_six_way(dir, "struct_mutation_scope", "selfhost/native32_tests/struct_mutation_scope.sa", "selfhost/native32_tests/golden/struct_mutation_scope.arm64.elf", "selfhost/native32_tests/golden/struct_mutation_scope.riscv64.elf")
+hold vstruct_scope_oracle = assert_files_eq("selfhost/native32_tests/struct_mutation_scope.want", concat(dir, "/struct_mutation_scope.seed.out"), "struct mutation scope independent oracle")
+hold vstruct_refusals = verify_struct_store_refusals(dir)
 hold vset = verify_native_only_list(dir, "list_set")
 hold vset_refs = verify_two_reference(dir, "list_set")
 hold vset_full = verify_list_set_full_native(dir, "list_set")
@@ -1142,11 +1252,17 @@ hold vlistindex = verify_six_way(dir, "list_index", "selfhost/native32_tests/lis
 hold vlistindex_oracle = assert_files_eq("selfhost/native32_tests/list_index.want", concat(dir, "/list_index.seed.out"), "list index independent oracle")
 hold vstruct = verify_six_way(dir, "struct_num", "selfhost/native32_tests/struct_num.sa", "selfhost/native32_tests/golden/struct_num.arm64.elf", "selfhost/native32_tests/golden/struct_num.riscv64.elf")
 hold vstruct_oracle = assert_files_eq("selfhost/native32_tests/struct_num.want", concat(dir, "/struct_num.seed.out"), "numeric struct independent oracle")
+hold vstruct_string = verify_six_way(dir, "struct_string", "selfhost/native32_tests/struct_string.sa", "selfhost/native32_tests/golden/struct_string.arm64.elf", "selfhost/native32_tests/golden/struct_string.riscv64.elf")
+hold vstruct_string_oracle = assert_files_eq("selfhost/native32_tests/struct_string.want", concat(dir, "/struct_string.seed.out"), "string struct independent oracle")
 hold vrec = verify_six_way(dir, "recursion", "selfhost/native32_tests/recursion.sa", "selfhost/native32_tests/golden/recursion.arm64.elf", "selfhost/native32_tests/golden/recursion.riscv64.elf")
 hold vstrfn = verify_six_way(dir, "strfn", "selfhost/native32_tests/strfn.sa", "selfhost/native32_tests/golden/strfn.arm64.elf", "selfhost/native32_tests/golden/strfn.riscv64.elf")
 hold vstrrec = verify_six_way(dir, "strrec", "selfhost/native32_tests/strrec.sa", "selfhost/native32_tests/golden/strrec.arm64.elf", "selfhost/native32_tests/golden/strrec.riscv64.elf")
 hold vstrarity = verify_six_way(dir, "strarity", "selfhost/native32_tests/strarity.sa", "selfhost/native32_tests/golden/strarity.arm64.elf", "selfhost/native32_tests/golden/strarity.riscv64.elf")
 hold vcap = test_fn_depth_cap(dir)
+hold vstruct_depth = test_list_index_fault(dir, "struct_mutation_depth_cap")
+hold vstruct_string_depth = test_list_index_fault(dir, "struct_string_depth_cap")
+hold vstruct_string_oob_high = test_list_index_fault(dir, "struct_string_index_oob_high")
+hold vstruct_string_oob_low = test_list_index_fault(dir, "struct_string_index_oob_low")
 hold vh = test_concat_heap_limit(dir)
 hold vix = test_string_index_bounds(dir)
 hold vixhi = test_list_index_fault(dir, "list_index_oob_high")

@@ -1,0 +1,3 @@
+struct Row { text, n }
+hold a = Row { "one" }
+show a.text

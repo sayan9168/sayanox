@@ -1,0 +1,5 @@
+struct Row { text }
+hold a = 2
+hold b = Row { "foo" }
+hold c = Row { a.text }
+show c.text

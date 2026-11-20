@@ -1,0 +1,3 @@
+struct Row { text }
+hold a = Row { concat("a", "b") }
+show a.text

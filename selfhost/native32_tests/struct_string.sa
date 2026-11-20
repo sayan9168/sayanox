@@ -1,0 +1,21 @@
+struct Row { n, text }
+make descend(n: num) -> num {
+  hold p = Row { n, "ok" }
+  when n == 0 {
+    give len(p.text)
+  }
+  hold tail = descend(n - 1)
+  give len(p.text) + p.n + tail
+}
+hold word = "alpha"
+hold a = Row { 3, word }
+hold b = Row { n: 7, text: "beta" }
+show a.text
+show len(a.text)
+show b.text
+show len(b.text)
+hold copy = a.text
+word = "new"
+show copy
+show string_eq(a.text, "alpha")
+show descend(2)

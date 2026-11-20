@@ -1,0 +1,7 @@
+// Twenty string fields occupy 20 numeric layout words plus 40 pair words.
+struct Wide { a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t }
+make check() -> num {
+  hold v = Wide { "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t" }
+  give len(v.a) + len(v.t)
+}
+show check()

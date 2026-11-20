@@ -1,0 +1,4 @@
+struct Row { text }
+hold a = Row { "before" }
+a.text = "after"
+show a.text

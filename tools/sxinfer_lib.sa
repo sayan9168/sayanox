@@ -2395,7 +2395,9 @@ make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
           hold val_slot = sb + 68 + fi
           hold fsid_slot = sb + 84 + fi
           when st[seen_slot] == 1 {
-            when st[val_slot] != fk {
+            // A string selector may be unresolved during iterative inference;
+            // the strict pass must still resolve it and check the exact kind.
+            when st[val_slot] != fk && (st[2] == 0 || fk >= 0 || st[val_slot] != 1) {
               hold m4 = concat("struct field '", sname)
               m4 = concat(m4, ".")
               m4 = concat(m4, fname)
