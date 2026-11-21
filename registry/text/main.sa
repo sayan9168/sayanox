@@ -1,0 +1,114 @@
+// registry/text -- small byte-text helpers for Sayanox programs.
+//
+// Strings are byte strings, exactly as in the standard library: one UTF-8 rune
+// is several bytes and stays several bytes. There is no slice builtin, so the
+// package carries its own and the other registry packages reuse it. Prefix
+// `pkgtext_` keeps the flat splice namespace free for the program that
+// installs it. Plain portable Sayanox: seed-min, gen2 and the native compiler
+// all build it (test-sxpkg compiles and runs every published package).
+
+// Bytes [a, b) of s, clamped to the string. An empty or reversed range gives "".
+make pkgtext_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold from = a
+  hold to = b
+  when from < 0 {
+    hold from = 0
+  }
+  when to > n {
+    hold to = n
+  }
+  hold out = ""
+  hold i = from
+  while i < to {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Number of whitespace-separated words. Runs of spaces, TAB, LF and CR are one
+// boundary, and leading or trailing blanks add nothing.
+make pkgtext_words(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  hold count = 0
+  hold seen = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    hold blank = 0
+    when c == 32 { hold blank = 1 }
+    when c == 9 { hold blank = 1 }
+    when c == 10 { hold blank = 1 }
+    when c == 13 { hold blank = 1 }
+    when blank == 1 {
+      hold seen = 0
+    } otherwise {
+      when seen == 0 {
+        hold count = count + 1
+        hold seen = 1
+      }
+    }
+    hold i = i + 1
+  }
+  give count
+}
+
+// Every byte `b` becomes a space, everything else is kept.
+make pkgtext_flatten(s: str, b: num) -> str {
+  hold n = len(s)
+  hold i = 0
+  hold out = ""
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == b {
+      hold out = concat(out, " ")
+    } otherwise {
+      hold out = concat(out, chr(c))
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// s written n times; a zero or negative count gives the empty string.
+make pkgtext_repeat(s: str, n: num) -> str {
+  hold out = ""
+  hold i = 0
+  while i < n {
+    hold out = concat(out, s)
+    hold i = i + 1
+  }
+  give out
+}
+
+// The first ASCII letter of s, upper-cased; nothing else changes.
+make pkgtext_title(s: str) -> str {
+  when len(s) == 0 {
+    give ""
+  }
+  hold c = sx_index(s, 0)
+  when c < 97 {
+    give s
+  }
+  when c > 122 {
+    give s
+  }
+  give concat(chr(c - 32), pkgtext_slice(s, 1, len(s)))
+}
+
+// 1 when s begins with pre. The empty prefix is at the start of every string.
+make pkgtext_starts(s: str, pre: str) -> num {
+  hold n = len(pre)
+  when len(s) < n {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) != sx_index(pre, i) {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}

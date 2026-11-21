@@ -3,3 +3,6 @@ hello=0.1.0
 math=0.1.0
 strings=0.1.0
 calc=0.1.0
+text=0.1.0
+numfmt=0.1.0
+kv=0.1.0

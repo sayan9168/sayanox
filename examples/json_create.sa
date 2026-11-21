@@ -1,0 +1,31 @@
+// Building a JSON document out of nothing, one path at a time. The reader
+// (jd_valid/jd_type/jd_text/jd_num/jd_len) already knew how to look at a
+// member; jd_put_raw creates the containers a dotted path is missing and writes
+// the leaf, keeping every unrelated byte of the document exactly as it was.
+//
+// Build: ./selfhost/gen2 examples/json_create.sa /tmp/create.c
+//        cc -std=gnu11 -O2 -o /tmp/create /tmp/create.c -lm && /tmp/create
+use "stdlib/json_deep.sa"
+
+// A digit segment indexes an array, anything else is an object key -- that is
+// the whole rule, and it is what decides the kind of a container being created.
+hold doc = jd_put_raw("{}", "user.name", "\"ada\"")
+show doc
+show jd_text(doc, "user.name")
+
+// Growing the same document: a nested object, then an array element at index 0.
+hold doc2 = jd_put_raw(doc, "user.prefs.theme", "\"dark\"")
+show jd_put_raw(doc2, "user.points", "[10]")
+show jd_type(jd_put_raw(doc2, "user.points.0", "11"), "user.points")
+
+// An existing array may be appended at its length, and past it is refused
+// rather than padded with invented elements.
+hold nums = jd_put_raw("{\"a\": [1, 2]}", "a.2", "3")
+show nums
+show len(jd_put_raw("{\"a\": [1, 2]}", "a.5", "9"))
+
+// A scalar in the way is a refusal too: numbers are never retyped into objects.
+show len(jd_put_raw("{\"a\": 1}", "a.b", "2"))
+
+// Unrelated bytes survive: spacing, the numeric spelling, the key order.
+show jd_put_raw("{ \"a\" : [1e2, 2], \"b\" : 1.50 }", "c", "true")

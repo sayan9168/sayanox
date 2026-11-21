@@ -1545,3 +1545,235 @@ make jd_object_ensure_raw(doc: str, path: str, raw_val: str) -> str {
   }
   give ""
 }
+
+// ---------------------------------------------------------------------------
+// Creating missing containers
+// ---------------------------------------------------------------------------
+//
+// jd_object_ensure_raw above only creates OBJECTS: a path that steps into an
+// array element, or that needs a new array, was refused. The three helpers
+// below close that gap and infer the container kind from the way the path
+// indexes into it, which is the one rule that keeps a dotted path unambiguous:
+//
+//   a segment made only of decimal digits indexes an ARRAY;
+//   any other segment is the key of an OBJECT member.
+//
+// So `jd_put_raw(doc, "a.b.0.c", "1")` creates `b` as an array holding an
+// object with member `c`, while `jd_put_raw(doc, "a.b.c", "1")` creates `b` as
+// an object. A missing array is created with exactly one element: index 0. A
+// larger index would need empty slots, and sparse creation is refused rather
+// than silently padded. Appending to an EXISTING array at its length is
+// allowed, beyond the length is not.
+//
+// Everything else keeps the rules of the helpers above: both inputs must be
+// complete valid JSON, existing bytes (whitespace, numeric spellings, key
+// order) are preserved, the first duplicate key wins, and any refusal returns
+// the empty string.
+
+// Replace the value that starts at index `start`, keeping every other byte.
+make jd_replace_at(doc: str, start: num, raw_val: str) -> str {
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  hold end = jd_skip_value(doc, start)
+  when end < 0 {
+    give ""
+  }
+  give concat(concat(jd_slice(doc, 0, start), raw_val), jd_slice(doc, end, len(doc) - end))
+}
+
+// The container text that holds one path segment: an array when the segment is
+// a decimal index, an object otherwise. A decimal index above 0 is refused
+// because it would need padding, and a segment that is not a valid JSON key is
+// refused. `inner` is the value that goes inside.
+make jd_new_container(seg: str, inner: str) -> str {
+  hold idx = jd_seg_index(seg)
+  when idx >= 0 {
+    when idx > 0 {
+      give ""
+    }
+    give concat(concat("[", inner), "]")
+  }
+  hold key = concat(concat("\"", seg), "\"")
+  when jd_valid(key) == 0 {
+    give ""
+  }
+  give concat(concat(concat("{", key), concat(":", inner)), "}")
+}
+
+// Wrap raw_val in one container per missing path level, from the leaf down to
+// the level after `k`. The empty string when a level cannot be created.
+make jd_build_tail(path: str, k: num, count: num, raw_val: str) -> str {
+  hold subtree = raw_val
+  hold j = count - 1
+  hold more = 1
+  while more == 1 {
+    hold again = 1
+    when j <= k {
+      hold again = 0
+    } otherwise {
+      hold made = jd_new_container(jd_seg(path, j), subtree)
+      when len(made) == 0 {
+        hold subtree = ""
+        hold again = 0
+      } otherwise {
+        hold subtree = made
+        hold j = j - 1
+      }
+    }
+    hold more = again
+  }
+  give subtree
+}
+
+// Every segment of a dotted path must survive being quoted as a JSON string;
+// a digit segment is additionally read as an index. Checked up front so a
+// refusal never leaves a half-written document.
+make jd_check_path(path: str, count: num) -> num {
+  hold k = 0
+  hold ok = 1
+  hold more = 1
+  while more == 1 {
+    hold again = 1
+    when k >= count {
+      hold again = 0
+    } otherwise {
+      hold key = concat(concat("\"", jd_seg(path, k)), "\"")
+      when jd_valid(key) == 0 {
+        hold ok = 0
+        hold again = 0
+      }
+      when ok == 1 {
+        hold k = k + 1
+      }
+    }
+    hold more = again
+  }
+  give ok
+}
+
+// Append one member to the object, or one element to the array, that starts at
+// index `parent`. `key` is the raw segment for an object parent and is ignored
+// for an array parent, where the value is appended at the end.
+make jd_append_child(doc: str, parent: num, key: str, raw_val: str, is_array: num) -> str {
+  hold closer = 125
+  when is_array == 1 {
+    hold closer = 93
+  }
+  hold end = jd_skip_value(doc, parent)
+  when end < 0 {
+    give ""
+  }
+  hold pair = raw_val
+  when is_array == 0 {
+    hold quoted = concat(concat("\"", key), "\"")
+    when jd_valid(quoted) == 0 {
+      give ""
+    }
+    hold pair = concat(quoted, concat(":", raw_val))
+  }
+  hold close = end - 1
+  hold comma = ""
+  when sx_index(doc, jd_skip_ws(doc, parent + 1)) != closer {
+    hold comma = ","
+  }
+  give concat(concat(jd_slice(doc, 0, close), concat(comma, pair)), jd_slice(doc, close, len(doc) - close))
+}
+
+// Set a value at a dotted path, creating every missing container along the way
+// and inferring whether each one is an object or an array. The empty path
+// replaces the root, exactly as in jd_set_raw. A value that exists is replaced
+// and never retyped: an existing array is never turned into an object, and a
+// scalar in the middle of a path is a refusal, not an overwrite.
+make jd_put_raw(doc: str, path: str, raw_val: str) -> str {
+  when jd_valid(doc) == 0 {
+    give ""
+  }
+  when jd_valid(raw_val) == 0 {
+    give ""
+  }
+  when len(path) == 0 {
+    give jd_set_raw(doc, path, raw_val)
+  }
+  hold count = jd_seg_count(path)
+  hold checked = jd_check_path(path, count)
+  when checked == 0 {
+    give ""
+  }
+  hold at = jd_skip_ws(doc, 0)
+  hold k = 0
+  hold out = ""
+  hold more = 1
+  while more == 1 {
+    hold again = 1
+    hold seg = jd_seg(path, k)
+    hold last = 0
+    when k == count - 1 {
+      hold last = 1
+    }
+    hold c = sx_index(doc, at)
+    when c == 123 {
+      hold v = jd_member(doc, at, seg)
+      when v >= 0 {
+        when last == 1 {
+          hold out = jd_replace_at(doc, v, raw_val)
+          hold again = 0
+        } otherwise {
+          hold at = v
+        }
+      } otherwise {
+        hold tail = jd_build_tail(path, k, count, raw_val)
+        when len(tail) == 0 {
+          hold again = 0
+        } otherwise {
+          hold out = jd_append_child(doc, at, seg, tail, 0)
+          hold again = 0
+        }
+      }
+    } otherwise {
+      when c == 91 {
+        hold idx = jd_seg_index(seg)
+        hold n = jd_count(doc, at)
+        when idx < 0 {
+          hold again = 0
+        } otherwise {
+          when idx > n {
+            hold again = 0
+          } otherwise {
+            when idx < n {
+              hold v = jd_element(doc, at, idx)
+              when v < 0 {
+                hold again = 0
+              } otherwise {
+                when last == 1 {
+                  hold out = jd_replace_at(doc, v, raw_val)
+                  hold again = 0
+                } otherwise {
+                  hold at = v
+                }
+              }
+            } otherwise {
+              hold tail = jd_build_tail(path, k, count, raw_val)
+              when len(tail) == 0 {
+                hold again = 0
+              } otherwise {
+                hold out = jd_append_child(doc, at, "", tail, 1)
+                hold again = 0
+              }
+            }
+          }
+        }
+      } otherwise {
+        hold again = 0
+      }
+    }
+    when again == 1 {
+      hold k = k + 1
+      when k >= count {
+        hold again = 0
+      }
+    }
+    hold more = again
+  }
+  give out
+}

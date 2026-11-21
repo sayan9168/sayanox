@@ -1,5 +1,43 @@
 # Status
 
+**2026-11-21 local R07 increment: CSV dialect sniffing and JSON path creation**
+
+Two stdlib gaps closed with frozen independent oracles. `stdlib/csv.sa` now
+answers which single-byte delimiter a sample was written with
+(`csv_sniff`, `csv_sniff_list`, `csv_parse_row_sniff`, plus the `csv_sep_count`,
+`csv_line_cut`, `csv_first_line` and `csv_sniff_lines` pieces they are built
+from): a mechanical rule over at most 4096 bytes and 64 non-empty lines,
+unquoted-separator agreement on every line, the densest candidate winning, ties
+kept in candidate order, and an explicit `-1` for a one-column or ambiguous
+sample instead of a guess. `stdlib/json_deep.sa` gained `jd_put_raw`, which
+creates the containers a dotted path is missing and sets the leaf, inferring
+array versus object from whether the segment is all digits, refusing sparse
+index creation and every scalar-in-the-way case with `""`, and leaving unrelated
+bytes untouched. Both are pinned by new fixtures whose expected bytes were
+computed outside Sayanox - `selfhost/stdlib_csv_sniff.want` (106 rows) and
+`selfhost/stdlib_json_put.want` (116 rows) - and `test-stdlib-next` now requires
+seed-min, gen2, `native_aot` and `gen1_min` to produce those exact bytes and to
+agree with each other. Sniffing rows are additionally cross-checked against
+Python's `csv` module with seven documented divergences, all of them
+unterminated-quote inputs this codec refuses by contract. Stdlib depth (R07)
+stays open; this is two more operations, not a closed data layer.
+
+**2026-11-21 local R08 increment: three published packages, one index-driven registry gate**
+
+`registry/` published three more packages - `text`, `numfmt` and `kv`, the last
+depending on the first - and `test-registry-sums` was rewritten to read
+`registry/INDEX` instead of a package list hard-coded inside the gate. It now
+checks `pkg.meta` name/version/sum against the tree, re-derives every `sum=`
+with `sxpkg sum`, refuses a `registry/` directory that is missing from the
+index, and compiles and runs a one-line probe per package with gen2 from inside
+a project holding its own `.sayanox/registry` copy, so a package that no program
+can build - or that reaches for a helper it never declared - fails here. The
+gate caught one of its own wrong expectations (`pkgtext_words("a bb  c")` is 3,
+not 2) before it caught any code, and three negative controls (index entry with
+no package, package directory outside the index, tampered `sum=`) each fail it.
+Authenticated transport, key distribution and trust roots (R08) are untouched
+and stay open.
+
 **2026-11-19 local R02 increment: string-field initializer parity**
 
 A bounded change allows `Row { ..., a.text }` in gen2 and defers unresolved

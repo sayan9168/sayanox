@@ -1,0 +1,162 @@
+// Independent CSV dialect-sniffing oracle. The expected bytes come from a
+// separate Python model of the documented rule (stdlib/csv.sa, "dialect
+// sniffing"), NOT from running Sayanox. Runs on seed-min, gen2 and
+// native_aot through ./sx target test-stdlib-next.
+use "stdlib/csv.sa"
+
+// separator counting
+// Each row is the unquoted separator count of one line for one delimiter. A
+// quoted field protects its separators, and a doubled quote inside such a field
+// is an escaped quote that keeps the field quoted.
+show csv_sep_count("a,b,c", 44)
+show csv_sep_count("a;b;c", 44)
+show csv_sep_count("", 44)
+show csv_sep_count("solo", 44)
+show csv_sep_count("\"a,b\",c", 44)
+show csv_sep_count("\"a,b;c\",d;e", 59)
+show csv_sep_count("\"a\"\"b\",c", 44)
+show csv_sep_count("x,\"y\"\"z\"", 44)
+show csv_sep_count("\"unterminated,x", 44)
+show csv_sep_count("a,\"b,c", 44)
+show csv_sep_count("\"a,b\"", 44)
+show csv_sep_count("a\tb\tc", 9)
+show csv_sep_count("|a|b|", 124)
+show csv_sep_count("a|b|c", 124)
+show csv_sep_count("\"a|b\",c|d", 124)
+show csv_sep_count("a,,b", 44)
+show csv_sep_count(",a", 44)
+show csv_sep_count("a,\"\"", 44)
+show csv_sep_count("\"\",\"\"", 44)
+show csv_sep_count("a\"b,c", 44)
+show csv_sep_count("\"a\"\"b;c\"\"d\",e", 59)
+show csv_sep_count("a;;b", 44)
+// first line and line cutting
+// A bound larger than the sample is clamped, and a range that ends on CR drops the
+// CR the way a real line break does.
+show csv_first_line("x;y\r\nz\r\n")
+show csv_first_line("x;y\nz\n")
+show csv_first_line("only")
+show csv_first_line("")
+show csv_first_line("\nabc")
+show csv_first_line("\r\nabc")
+show len(csv_first_line("a,b\nc,d"))
+show csv_line_cut("a,b\r\nc,d", 4, 9)
+show len(csv_line_cut("a,b\r\nc,d", 0, 0))
+show csv_line_cut("a,b\nc,d", 0, 3)
+show csv_line_cut("a,b\r\n", 0, 5)
+// sniffing: one delimiter per case
+// A sample whose lines disagree, or whose rows do not parse under the candidate,
+// decides nothing and answers -1.
+show csv_sniff("name,age\nann,31\nbob,42\n")
+show csv_sniff("name\tage\nann\t31\nbob\t42\n")
+show csv_sniff("name;age\nann;31\nbob;42\n")
+show csv_sniff("name|age\nann|31\nbob|42\n")
+show csv_sniff("a,b\n")
+show csv_sniff("a,b")
+show csv_sniff("a;b;c\r\n1;2;3\r\n")
+show csv_sniff("id;name\n7;\"a,b\"\n8;\"c,d\"\n")
+show csv_sniff("id,name\n7,\"a;b\"\n8,\"c;d\"\n")
+show csv_sniff("a,b;c\nd,e;f\n")
+show csv_sniff("a;b;c\nd;e\n")
+show csv_sniff("hello\nworld\n")
+show csv_sniff("")
+show csv_sniff("\n\n")
+show csv_sniff("a,b\nbad \"row\n")
+show csv_sniff("a,b\nunclosed\"x,1\n")
+show csv_sniff("q,w,e\n1,2\n")
+show csv_sniff("\"a,b\",c\n\"d,e\",f\n")
+show csv_sniff("a,b,\n1,2,\n")
+show csv_sniff(",\n,\n")
+show csv_sniff("a|b|c|d\n1|2|3|4\n")
+show csv_sniff("a;b\nc;d\ne;f\n")
+show csv_sniff("x,y\np;q\n")
+// candidate lists
+// The supplied order breaks a tie and an illegal candidate is skipped.
+hold c5944 = [59, 44]
+show csv_sniff_list("a;b,c\nd;e,f\n", c5944)
+hold c4459 = [44, 59]
+show csv_sniff_list("a;b,c\nd;e,f\n", c4459)
+hold c3444 = [34, 44]
+show csv_sniff_list("a,b\n1,2\n", c3444)
+hold c34 = [34]
+show csv_sniff_list("a,b\n1,2\n", c34)
+hold cempty = []
+show csv_sniff_list("a,b\n1,2\n", cempty)
+hold c9 = [9]
+show csv_sniff_list("a,b\n1,2\n", c9)
+hold c61 = [61]
+show csv_sniff_list("a=1\nb=2\n", c61)
+hold c6144 = [61, 44]
+show csv_sniff_list("a=1=2\nb=3=4\n", c6144)
+hold c961 = [9, 61]
+show csv_sniff_list("a=1\tb\na=2\tb\n", c961)
+hold c449 = [44, 9]
+show csv_sniff_list("a,b\nc,d\n", c449)
+show csv_delim_ok(61)
+show csv_delim_ok(34)
+show csv_delim_ok(32)
+show csv_delim_ok(10)
+show csv_delim_ok(9)
+show csv_delim_ok(127)
+hold neg = 0 - 1
+show csv_delim_ok(neg)
+// sniffing then parsing
+// csv_parse_row_sniff refuses instead of handing a caller a -1 delimiter.
+show csv_count(csv_parse_row_sniff("x;y;z", "a;b\nc;d\n"))
+show len(csv_parse_row_sniff("x,y,z", "a;b\nc;d\n"))
+show csv_at(csv_parse_row_sniff("x;y;z", "a;b\nc;d\n"), 2)
+show csv_parse_row_sniff("x;y", "no delim here\n")
+show len(csv_parse_row_sniff("x;y\nz", "a;b\nc;d\n"))
+hold row = csv_parse_row_sniff("k;l;m", "a;b;c\nd;e;f\n")
+show csv_ok(row)
+show csv_count(row)
+show csv_at(row, 0)
+show csv_at(row, 2)
+show csv_write_row_d(row, csv_sniff("a;b;c\nd;e;f\n"))
+show csv_count(csv_parse_row(csv_at(csv_parse_row_sniff("a;b", "x;y\nz;w\n"), 1)))
+show len(csv_parse_row_sniff("a;b", "hello there\n"))
+// quoted records that span a line break
+// Sniffing is line-based on purpose: a quoted field containing LF is not followed
+// across lines, so the row through the break is refused rather than guessed. The
+// same bytes with the quoting closed on one line are decided.
+show csv_sniff("k;v\na;\"x\n\"\nb;y\n")
+show csv_sniff("k;v\na;\"x \"\"y\"\"\"\nb;y\n")
+show csv_is_valid_row_d("a;\"x", 59)
+show csv_is_valid_row_d("a;\"x\"\"y\";z", 59)
+// the 64-line cap
+// 64 agreeing semicolon lines then a disagreeing one: the extra line is never
+// read, so the dialect is still decided. With 63 agreeing lines the 64th is read,
+// the disagreement is seen, and nothing is decided.
+hold big64 = ""
+hold n64 = 0
+while n64 < 64 {
+  hold big64 = concat(big64, "1;2;3\n")
+  hold n64 = n64 + 1
+}
+show csv_sniff(concat(big64, "4,5,6\n"))
+show csv_sniff(big64)
+show csv_sniff_lines(big64, 512, 59)
+hold big63 = ""
+hold n63 = 0
+while n63 < 63 {
+  hold big63 = concat(big63, "1;2;3\n")
+  hold n63 = n63 + 1
+}
+show csv_sniff(concat(big63, "4,5,6\n"))
+show csv_sniff(big63)
+show csv_sniff_lines(concat(big63, "4,5,6\n"), 512, 59)
+// the sample bound
+// csv_sniff only ever looks at the first 4096 bytes; a smaller bound is the
+// caller's, a bound larger than the sample is clamped, and a bound that cuts a
+// record in half leaves a partial final line judged like any other line.
+show csv_sniff_lines("a;b\n", 4, 59)
+show csv_sniff_lines("a;b\n", 6, 59)
+show csv_sniff_lines("a;b\n", 0, 59)
+show csv_sniff_lines("a;b\nc;d\n", 3, 59)
+show csv_sniff_lines("a;b\nc;d\n", 8, 59)
+show csv_sniff_lines("a;b\nc;d\n", 100, 59)
+show csv_sniff_lines("a;b\nq\n", 6, 59)
+show csv_sniff_lines("a;b\nc;d\n", 6, 44)
+show csv_sniff_lines("a;b\nc;d\n", 7, 59)
+show csv_sniff_lines("x;y\n", 4096, 59)
+show "csv-sniff-ok"

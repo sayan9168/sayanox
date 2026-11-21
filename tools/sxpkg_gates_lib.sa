@@ -218,21 +218,157 @@ make kp_crypto(d: str) -> num {
   hold pub_digest = kp_hex(kp_field(meta, "sha256"), 64, "published digest")
   give gl_assert_eq_num(gl_starts_with(kp_field(meta, "origin"), "publish:"), 1, "publish provenance")
 }
+// The published packages, read from registry/INDEX instead of a list kept by
+// hand beside it: a package can no longer be added to the index without its
+// manifest, its sum and its build being checked, and a directory that is not in
+// the index is refused rather than quietly unpublished.
+make kp_index_names(text: str) -> str {
+  hold out = ""
+  hold i = 0
+  while i < len(text) {
+    hold start = i
+    while i < len(text) && sx_index(text, i) != 10 { i = i + 1 }
+    hold line = gl_slice(text, start, i)
+    i = i + 1
+    when len(line) > 0 {
+      when sx_index(line, 0) != 35 {
+        hold at = 0
+        while at < len(line) && sx_index(line, at) != 61 { at = at + 1 }
+        when at > 0 {
+          hold one = gl_slice(line, 0, at)
+          hold out = concat(out, concat(one, "\n"))
+        }
+      }
+    }
+  }
+  give out
+}
+
+// A Sayanox string literal for text, written with chr(34) so this file needs no
+// escaped quote of its own.
+make kp_str(text: str) -> str {
+  hold q = chr(34)
+  give concat(concat(q, text), q)
+}
+
+// One-line program that installs the package and calls into it, so every published
+// package is proven to be usable from a real project and not just readable. The
+// expected stdout is written down beside it, independent of the package source.
+make kp_pkg_probe(name: str) -> str {
+  hold nl = chr(10)
+  hold imp = "use "
+  hold imp = concat(imp, kp_str(concat(concat(".sayanox/registry/", name), "/main.sa")))
+  hold imp = concat(imp, nl)
+  when string_eq(name, "hello") == 1 { give concat(imp, concat("show ", concat(kp_str("done"), nl))) }
+  when string_eq(name, "math") == 1 { give concat(imp, concat("show dbl(21)", nl)) }
+  when string_eq(name, "strings") == 1 { give concat(imp, concat("show greet(", concat(kp_str("bo"), concat(")", nl)))) }
+  when string_eq(name, "calc") == 1 { give concat(imp, concat("show dblsqr(3)", nl)) }
+  when string_eq(name, "text") == 1 { give concat(imp, concat("show pkgtext_words(", concat(kp_str("a bb  c"), concat(")", nl)))) }
+  when string_eq(name, "numfmt") == 1 { give concat(imp, concat("show pkgnf_commas(1234567)", nl)) }
+  when string_eq(name, "kv") == 1 {
+    hold line = concat(imp, "show pkgkv_num(")
+    hold line = concat(line, kp_str("a=1;b=22"))
+    hold line = concat(line, ", ")
+    hold line = concat(line, kp_str("b"))
+    hold line = concat(line, concat(", 59)", nl))
+    give line
+  }
+  give ""
+}
+
+// The exact stdout of that probe.
+make kp_pkg_want(name: str) -> str {
+  when string_eq(name, "hello") == 1 { give "hello from pkg\ndone" }
+  when string_eq(name, "math") == 1 { give "42" }
+  when string_eq(name, "strings") == 1 { give "hi bo" }
+  when string_eq(name, "calc") == 1 { give "36" }
+  when string_eq(name, "text") == 1 { give "3" }
+  when string_eq(name, "numfmt") == 1 { give "1,234,567" }
+  when string_eq(name, "kv") == 1 { give "22" }
+  give ""
+}
+
+// Build and run the probe with the project's own copy of the registry, so a
+// package that reaches for a dependency is compiled the way an installed project
+// sees it: the probe is written inside that project, because a relative `use`
+// line resolves from the main program's own directory.
+make kp_pkg_build(d: str, name: str) -> num {
+  hold cwd = path_real(d)
+  hold probe = kp_pkg_probe(name)
+  when len(probe) == 0 {
+    hold e = gl_fail(concat("no published-package probe for ", name))
+  }
+  hold sa = kp_join(cwd, "probe.sa")
+  hold w = gl_must_write(sa, probe)
+  hold c = kp_join(cwd, "probe.c")
+  hold bin = kp_join(cwd, "probe.bin")
+  hold gen2 = path_real("selfhost/gen2")
+  hold cmd = "cd "
+  hold cmd = concat(cmd, gl_sh_quote(cwd))
+  hold cmd = concat(cmd, " && ")
+  hold cmd = concat(cmd, gl_sh_quote(gen2))
+  hold cmd = concat(cmd, " ")
+  hold cmd = concat(cmd, gl_sh_quote(sa))
+  hold cmd = concat(cmd, " ")
+  hold cmd = concat(cmd, gl_sh_quote(c))
+  hold log = kp_join(cwd, "probe.emit.log")
+  hold rc = gl_run_merged(cmd, log)
+  when rc != 0 {
+    hold f = gl_fail(concat("gen2 exited nonzero on the ", concat(name, " package")))
+  }
+  hold emitted = read_file(c)
+  when gl_has_line_starting(emitted, "#error") == 1 {
+    hold f2 = gl_fail(concat("gen2 emitted #error on the ", concat(name, " package")))
+  }
+  hold built = gl_compile_c(c, bin, "-O2")
+  give gl_assert_out(gl_sh_quote(bin), kp_pkg_want(name), kp_join(cwd, "probe.out"))
+}
+
 make kp_registry(d: str) -> num {
-  hold names = "hello\nmath\nstrings\n"
+  hold index = read_file("registry/INDEX")
+  when len(index) == 0 { give gl_fail("registry/INDEX is missing or empty") }
+  hold seeded = kp_copy_tree(path_real("registry"), kp_join(d, ".sayanox/registry"))
+  hold names = kp_index_names(index)
+  when len(names) == 0 { give gl_fail("registry/INDEX lists no package") }
   hold i = 0
   while i < len(names) {
     hold start = i
     while i < len(names) && sx_index(names, i) != 10 { i = i + 1 }
     hold name = gl_slice(names, start, i)
     i = i + 1
-    hold dir = kp_join("registry", name)
-    hold sum = kp_field(read_file(kp_join(dir, "pkg.meta")), "sum")
-    when len(sum) == 0 { give gl_fail("missing registry sum") }
-    hold main = kp_join(dir, "main.sa")
-    hold log = kp_join(d, "sum.out")
-    hold captured = pg_capture(concat("./tools/sxpkg sum ", gl_sh_quote(main)), log)
-    hold exact = gl_assert_eq_str(read_file(log), concat("sxpkg: sum ", concat(sum, concat(" ", concat(main, "\n")))), "repository registry sum")
+    when len(name) > 0 {
+      hold want = kp_field(index, name)
+      hold dir = kp_join("registry", name)
+      hold meta_file = kp_join(dir, "pkg.meta")
+      when path_kind(meta_file) != 1 {
+        hold e = gl_fail(concat("published package has no pkg.meta: ", name))
+      }
+      hold meta = read_file(meta_file)
+      hold named = gl_assert_eq_str(kp_field(meta, "name"), name, "registry package name matches its directory")
+      hold version = gl_assert_eq_str(kp_field(meta, "version"), want, "registry package version matches the index")
+      hold sum = kp_field(meta, "sum")
+      when len(sum) == 0 { give gl_fail("missing registry sum") }
+      hold main = kp_join(dir, "main.sa")
+      hold log = kp_join(d, "sum.out")
+      hold captured = pg_capture(concat("./tools/sxpkg sum ", gl_sh_quote(main)), log)
+      hold exact = gl_assert_eq_str(read_file(log), concat("sxpkg: sum ", concat(sum, concat(" ", concat(main, "\n")))), "repository registry sum")
+      hold built = kp_pkg_build(d, name)
+    }
+  }
+  hold present = read_dir("registry")
+  hold p = 0
+  while p < len(present) {
+    hold start = p
+    while p < len(present) && sx_index(present, p) != 10 { p = p + 1 }
+    hold entry = gl_slice(present, start, p)
+    p = p + 1
+    when len(entry) > 0 {
+      when path_kind(kp_join("registry", entry)) == 2 {
+        when pg_find(names, concat(entry, "\n")) < 0 {
+          hold e = gl_fail(concat("registry directory missing from the index: ", entry))
+        }
+      }
+    }
   }
   give 0
 }
