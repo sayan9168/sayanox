@@ -90,17 +90,21 @@ show jd_put_raw("{}", "a", "NaN")
 show jd_put_raw("{}", "a", "01")
 // 41: a dangling exponent is not JSON
 show jd_put_raw("{}", "a", "1e")
-// 42: an empty segment is the empty key
+// 42: a digit segment is read as digits, leading zeros included, as the reader reads it
+show jd_put_raw("{\"a\": [1, 2]}", "a.01", "9")
+// 43: a segment that is not all digits cannot index an array
+show jd_put_raw("{\"a\": [1]}", "a.-1", "9")
+// 44: an empty segment is the empty key
 show jd_put_raw("{}", "a..b", "1")
-// 43: a key containing a dot cannot be addressed, so a new path is built
+// 45: a key containing a dot cannot be addressed, so a new path is built
 show jd_put_raw("{\"a.b\":1}", "a.b", "2")
-// 44: a string value
+// 46: a string value
 show jd_put_raw("{}", "a", "\"x\"")
-// 45: a boolean value
+// 47: a boolean value
 show jd_put_raw("{}", "a", "true")
-// 46: a value keeps its own bytes verbatim
+// 48: a value keeps its own bytes verbatim
 show jd_put_raw("{}", "a", " 4 ")
-// 47: and so does a created value
+// 49: and so does a created value
 show jd_put_raw("{\"a\":{}}", "a.b", " 5 ")
 
 // The byte length of each result, so a truncation cannot hide behind a
@@ -146,6 +150,8 @@ show len(jd_put_raw("{}", "a", "\"unterminated"))
 show len(jd_put_raw("{}", "a", "NaN"))
 show len(jd_put_raw("{}", "a", "01"))
 show len(jd_put_raw("{}", "a", "1e"))
+show len(jd_put_raw("{\"a\": [1, 2]}", "a.01", "9"))
+show len(jd_put_raw("{\"a\": [1]}", "a.-1", "9"))
 show len(jd_put_raw("{}", "a..b", "1"))
 show len(jd_put_raw("{\"a.b\":1}", "a.b", "2"))
 show len(jd_put_raw("{}", "a", "\"x\""))

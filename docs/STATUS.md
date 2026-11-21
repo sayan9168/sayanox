@@ -15,7 +15,7 @@ array versus object from whether the segment is all digits, refusing sparse
 index creation and every scalar-in-the-way case with `""`, and leaving unrelated
 bytes untouched. Both are pinned by new fixtures whose expected bytes were
 computed outside Sayanox - `selfhost/stdlib_csv_sniff.want` (106 rows) and
-`selfhost/stdlib_json_put.want` (112 rows) - and `test-stdlib-next` now requires
+`selfhost/stdlib_json_put.want` (116 rows) - and `test-stdlib-next` now requires
 seed-min, gen2, `native_aot` and `gen1_min` to produce those exact bytes and to
 agree with each other. Sniffing rows are additionally cross-checked against
 Python's `csv` module with seven documented divergences, all of them

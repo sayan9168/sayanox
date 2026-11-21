@@ -1763,10 +1763,13 @@ scalar is never retyped into a container, and every other byte of the document �
 spacing, `1e2`, `1.50`, `-0`, `\u0062`, trailing whitespace, a duplicate key —
 survives untouched, which is why the last example above grows `[1, 2]` into
 `[1, 2,3]` instead of reformatting the array. Both inputs must be complete valid JSON, and any refusal
-returns the empty string: padded index (`a.01`), a name used against an array,
-a number or a quoted-looking segment that does not parse, a scalar in the
-middle of the path, `NaN`, `01`, `1e`, a trailing comma, an unterminated string,
-and a scalar root addressed below itself. An **empty path** is the one exception
+returns the empty string: a segment that is not all digits used against an
+array (`a.b`, `a.-1`), an index past the end of an existing array, an index above
+0 where a new array has to be created, a scalar in the middle of the path,
+`NaN`, `01`, `1e`, a trailing comma, an unterminated string, and a scalar root
+addressed below itself. Leading zeros inside an index are **not** a refusal --
+`a.01` reads as index 1, because that is what the reader does with it, and both
+are pinned. An **empty path** is the one exception
 that is not a refusal: it replaces the whole document, through `jd_set_raw`.
 
 `jd_put_raw` shares `jd_seg`, `jd_seg_count` and the byte-level splice of
@@ -1782,7 +1785,7 @@ cases side by side.
 | Fixture | Rows | What it pins | Backends |
 | --- | --- | --- | --- |
 | `selfhost/stdlib_csv_sniff_test.sa` | 106 (`selfhost/stdlib_csv_sniff.want`, 108 lines) | `csv_sep_count` over quoted and unquoted lines, `csv_line_cut` bounds and CR handling, `csv_first_line`, per-delimiter line agreement, the four-candidate winner, tie order, the 64-line and 4096-byte caps, custom candidate lists with an illegal entry, and every refusal path | seed-min, gen2, native_aot, gen1_min |
-| `selfhost/stdlib_json_put_test.sa` | 112 (`selfhost/stdlib_json_put.want`, 114 lines) | 47 `jd_put_raw` documents (creation of objects and arrays, whole-member replacement, byte preservation, every refusal) re-read with the existing `jd_valid`/`jd_num`/`jd_text`/`jd_len`/`jd_flag` readers, plus a length guard on each result | seed-min, gen2, native_aot, gen1_min |
+| `selfhost/stdlib_json_put_test.sa` | 116 (`selfhost/stdlib_json_put.want`, 118 lines) | 49 `jd_put_raw` documents (creation of objects and arrays, whole-member replacement, byte preservation, every refusal) re-read with the existing `jd_valid`/`jd_num`/`jd_text`/`jd_len`/`jd_flag` readers, plus a length guard on each result | seed-min, gen2, native_aot, gen1_min |
 
 Both `.want` files were produced by a host-side generator that computes the
 expected bytes with Python's own `json` module — parse, edit, re-serialise —
