@@ -15,10 +15,10 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/list_algo.sa` | 21 typed list algorithms (`la_insert_sorted`, `la_sort`, `la_sorted`, `la_index_of`, `la_append`, `la_slice`, `la_take`, `la_drop`, `la_cumsum`, `la_repeat`, `la_scale`, `la_offset`, `la_zip_add`, `la_count_gt`, `la_remove_at`, `la_insert_at`, `la_distinct`, `la_lower_bound`, `la_upper_bound`, `la_merge_sorted`, `la_rotate`) | seed-min, gen2, native | `test-stdlib-modules` |
 | `stdlib/str_text.sa` | 22 typed byte-string helpers (`t_is_space_byte`, `t_is_digit_byte`, `t_index_of`, `t_last_index_of`, `t_slice`, `t_trim_left`, `t_trim_right`, `t_trim`, `t_cmp`, `t_is_digits`, `t_pad_left`, `t_pad_right`, `t_word_count`, `t_replace`, `t_remove`, `t_hash`, `t_parse_uint`, `t_uint_str`, `t_count_char`, `t_starts_with`, `t_ends_with`, `t_normalize_ws`) | seed-min, gen2, native | `test-stdlib-modules`, `test-stdlib-next` |
 | `stdlib/json_util.sa` | flat-object JSON build/read (`j_escape`, `j_kv_text`, `j_kv_number`, `j_kv_flag`, `j_pair`, `j_obj`, `j_arr_numbers`, `j_has`, `j_get_text`, `j_get_number`, `j_get_flag`) | seed-min, gen2, native | `test-stdlib-modules` |
-| `stdlib/json_deep.sa` | nested JSON reader and bounded mutations (`jd_set_raw`, `jd_delete_raw`, `jd_object_put_raw`, `jd_array_insert_raw`, `jd_object_ensure_raw`, `jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with dot-separated numeric indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep` |
+| `stdlib/json_deep.sa` | nested JSON reader and bounded mutations (`jd_set_raw`, `jd_delete_raw`, `jd_object_put_raw`, `jd_array_insert_raw`, `jd_object_ensure_raw`, `jd_put_raw`, `jd_valid`, `jd_type`, `jd_has`, `jd_raw`, `jd_text`, `jd_num`, `jd_flag`, `jd_len`, `jd_key`); dotted paths with dot-separated numeric indexes, 15 pinned refusals, agrees with `json_util.sa` on flat objects | seed-min, gen2, native | `test-stdlib-json-deep`, `test-stdlib-next` |
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
-| `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded separators/CR/LF, doubled quotes, three malformed-row refusals; delimiter-parameterized `_d` variants and `csv_delim_ok` for TSV/semicolon/pipe | seed-min, gen2, native | `test-stdlib-csv`, `test-stdlib-next` |
+| `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded separators/CR/LF, doubled quotes, three malformed-row refusals; delimiter-parameterized `_d` variants and `csv_delim_ok` for TSV/semicolon/pipe; `csv_sniff`/`csv_parse_row_sniff` pick the separator from an unlabelled sample | seed-min, gen2, native | `test-stdlib-csv`, `test-stdlib-next` |
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection; `ct_parse_d`/`ct_write_d` read and write any supported delimiter | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_stream.sa` | incremental RFC 4180 reading (`cs_*`) over `stdlib/csv.sa`: `cs_feed`/`cs_feed_d` take a chunk and return the status, the leftover state and the completed rows, so memory is bounded by the longest record instead of the document; quoted CRLF and doubled quotes may be split across any chunk boundary, CRLF and bare LF terminate identically, `cs_flush` refuses an unterminated quoted field instead of inventing a record, and a record past `cs_max_bytes()` (64 KiB) is refused rather than buffered without bound | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/uident.sa` | UAX #31 identifier syntax (`uid_*`) over `stdlib/utf8.sa`: `uid_xid_start`/`uid_xid_continue` for one code point from the Unicode 17.0.0 `DerivedCoreProperties.txt` tables (779 XID_Start ranges, 1422 XID_Continue ranges), `uid_valid` for a whole string with the explicit leading-underscore rule, `uid_valid_nfkc` for the stricter NFKC reading UAX #31 asks for, `uid_valid_list`, and `uid_same` for same-after-NFKC; `uid_valid` is the property-only answer that agrees with CPython's `str.isidentifier` | seed-min, gen2, native | `test-stdlib-next` |
@@ -1681,3 +1681,116 @@ case-insensitive matching, multiline mode, backreferences, lookaround, named
 groups, streaming over a subject larger than the input cap, and a
 `rx_split` that would need a list of strings — that list type does not exist
 here, so callers split with `rx_find_all` spans plus `rx_slice_s`.
+
+## Sniffing and creating (2026-11-21)
+
+Two gaps in the data layer, both closed the way every other module here is:
+a frozen fixture whose expected bytes are computed outside Sayanox, run on four
+backends by `test-stdlib-next`.
+
+### `csv.sa`: finding the separator
+
+A CSV file does not declare its delimiter, and a caller that has to guess has
+usually hard-coded a comma. `csv_sniff(sample)` answers the delimiter **byte**
+that explains a sample, or `-1` when nothing explains it, and
+`csv_parse_row_sniff(line, sample)` sniffs and parses in one step so a `-1` never
+reaches `csv_parse_row_d`.
+
+```sayanox
+use "stdlib/csv.sa"
+hold sample = "name\tnote\nwidget\tred, large\n"
+show csv_sniff(sample)                          // 9, a TAB
+show csv_parse_row_sniff("name\tnote", sample)  // 4:name4:note
+```
+
+A row is packed in `csv.sa`'s `<len>:<bytes>` form, so a field may itself
+contain a TAB or a comma without confusing the reader.
+
+The rule is mechanical, not statistical, so a wrong guess is reproducible:
+
+* A sample is split at LF, a trailing CR is dropped, and empty lines are
+  ignored. At most the first **4096 bytes** and the first **64 non-empty lines**
+  are looked at; a caller-supplied bound past the end of the sample is clamped
+  to it. More input is not an error, it is simply not examined.
+* A candidate matches a line set when **every** line holds the same number of
+  unquoted separator bytes, at least one of them, and every line is also a valid
+  row under `csv_is_valid_row_d`. A byte is unquoted when it sits outside a
+  quoted field, so `"a,b",c` is two fields and not three, and a doubled quote
+  inside a field does not end it.
+* The winner is the matching candidate with the most unquoted separators in the
+  **first** line; a tie keeps the earlier candidate. `csv_sniff` tries
+  comma (44), TAB (9), semicolon (59) and pipe (124) in that order;
+  `csv_sniff_list(sample, cands)` takes the caller's own list, in the caller's
+  order, and skips a candidate `csv_delim_ok` refuses.
+* A sample with no candidate separator at all, an unterminated quote, or a line
+  that disagrees with the first line's count gives `-1` from `csv_sniff` and
+  `""` from `csv_parse_row_sniff`. A one-column file is a **refusal**, not
+  evidence for a comma: it is also exactly what a semicolon file with one column
+  looks like.
+
+`csv_sep_count`, `csv_line_cut`, `csv_first_line` and `csv_sniff_lines` are
+public because a caller may want the pieces (count one line's fields, take the
+header, check one candidate delimiter against a document) and because pinning
+them is what makes the sniffing rule testable at all. Nothing here looks at file
+names, header words or data types. A row that quotes a field in the middle
+(`a"b,c`) is refused rather than read as data, so a sample containing such a row
+refuses to be sniffed at all -- that is deliberate, and it is why a sniffer
+belongs in front of a parser instead of in place of one. `examples/csv_sniff.sa`
+is a runnable tour of the four cases above.
+
+### `json_deep.sa`: creating a path, not only replacing one
+
+`jd_set_raw` and its siblings can only touch a member that already exists, so
+building a document out of nothing meant hand-writing JSON text. `jd_put_raw`
+walks a dotted path, creates the containers that are missing, and sets the leaf:
+
+```sayanox
+use "stdlib/json_deep.sa"
+show jd_put_raw("{}", "a.b", "1")        // {"a":{"b":1}}
+show jd_put_raw("{}", "a.0", "[true]")   // {"a":[[true]]}
+show jd_put_raw("[]", "0.x", "\"y\"")    // [{"x":"y"}]
+show jd_put_raw("{\"a\": [1, 2]}", "a.2", "3")   // {"a": [1, 2,3]}
+```
+
+The container kind is inferred from the way the path indexes into it, which is
+the one rule that keeps a dotted path unambiguous: a segment made only of
+decimal digits indexes an **array**, any other segment is the key of an
+**object** member. A missing array is created with exactly one element, index
+`0`; index `3` in an empty array would need three empty slots, so it is refused
+rather than silently padded. Appending to an existing array at its length is
+allowed, beyond the length is not. Existing members are replaced whole, a
+scalar is never retyped into a container, and every other byte of the document —
+spacing, `1e2`, `1.50`, `-0`, `\u0062`, trailing whitespace, a duplicate key —
+survives untouched, which is why the last example above grows `[1, 2]` into
+`[1, 2,3]` instead of reformatting the array. Both inputs must be complete valid JSON, and any refusal
+returns the empty string: padded index (`a.01`), a name used against an array,
+a number or a quoted-looking segment that does not parse, a scalar in the
+middle of the path, `NaN`, `01`, `1e`, a trailing comma, an unterminated string,
+and a scalar root addressed below itself. An **empty path** is the one exception
+that is not a refusal: it replaces the whole document, through `jd_set_raw`.
+
+`jd_put_raw` shares `jd_seg`, `jd_seg_count` and the byte-level splice of
+`jd_set_raw`, and adds `jd_replace_at`, `jd_new_container`, `jd_build_tail`,
+`jd_check_path` and `jd_append_child`. Keys containing dots still cannot be
+addressed by path; `jd_object_put_raw` takes a raw JSON key spelling for those.
+`examples/json_create.sa` builds a document from `{}` one path at a time and
+shows the append-at-length, sparse-index, scalar-in-the-way and byte-preservation
+cases side by side.
+
+### Verification
+
+| Fixture | Rows | What it pins | Backends |
+| --- | --- | --- | --- |
+| `selfhost/stdlib_csv_sniff_test.sa` | 106 (`selfhost/stdlib_csv_sniff.want`, 108 lines) | `csv_sep_count` over quoted and unquoted lines, `csv_line_cut` bounds and CR handling, `csv_first_line`, per-delimiter line agreement, the four-candidate winner, tie order, the 64-line and 4096-byte caps, custom candidate lists with an illegal entry, and every refusal path | seed-min, gen2, native_aot, gen1_min |
+| `selfhost/stdlib_json_put_test.sa` | 112 (`selfhost/stdlib_json_put.want`, 114 lines) | 47 `jd_put_raw` documents (creation of objects and arrays, whole-member replacement, byte preservation, every refusal) re-read with the existing `jd_valid`/`jd_num`/`jd_text`/`jd_len`/`jd_flag` readers, plus a length guard on each result | seed-min, gen2, native_aot, gen1_min |
+
+Both `.want` files were produced by a host-side generator that computes the
+expected bytes with Python's own `json` module — parse, edit, re-serialise —
+**and** splices them byte by byte out of the original document, and both results
+must agree before a single line is frozen; the same generator also re-reads every
+accepted document through an independent parser. Seven sniffing rows deliberately
+disagree with Python's `csv` module (`x,"y` and `a"b,c`: an unterminated quoted
+field), which is this codec's documented refusal and is written down as such
+instead of being hidden. The fixtures are frozen: nothing regenerates them at
+gate time, and `test-stdlib-next` requires all four backends to produce those
+exact bytes and to agree with each other.

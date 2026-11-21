@@ -1,0 +1,5 @@
+name=numfmt
+version=0.1.0
+desc=exact decimal text, grouping and padding for whole numbers
+deps=
+sum=609229368

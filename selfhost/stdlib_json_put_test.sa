@@ -1,0 +1,182 @@
+// Independent oracle for jd_put_raw: set a value at a dotted path,
+// creating the containers that are missing and inferring an array or
+// an object from the segment that indexes into it. Every expected byte
+// is hand-written from the contract in stdlib/json_deep.sa and then
+// checked against a Python byte model and a Python semantic edit of the
+// same rule; Sayanox produced none of these expectations. Runs on
+// seed-min, gen2 and native_aot through ./sx target test-stdlib-next.
+use "stdlib/json_deep.sa"
+
+// jd_put_raw(doc, path, value). An empty line is a refusal.
+// 1: member added to an existing object
+show jd_put_raw("{\"a\":{}}", "a.b", "1")
+// 2: element appended at the length
+show jd_put_raw("{\"a\":[1]}", "a.1", "2")
+// 3: first element of an existing empty array
+show jd_put_raw("{\"a\":[]}", "a.0", "1")
+// 4: sibling member inside an existing array element
+show jd_put_raw("{\"a\":{\"b\":[{\"c\":1}]}}", "a.b.0.d", "5")
+// 5: an existing leaf is replaced, not created
+show jd_put_raw("{\"a\":{\"b\":[{\"c\":1}]}}", "a.b.0.c", "5")
+// 6: root array element replaced
+show jd_put_raw("[1,2]", "0", "9")
+// 7: root array append
+show jd_put_raw("[1,2]", "2", "9")
+// 8: first element of the root array
+show jd_put_raw("[]", "0", "9")
+// 9: descend, then append inside the inner array
+show jd_put_raw("[[]]", "0.0", "3")
+// 10: descend, then append into an empty array
+show jd_put_raw("[{\"a\":[]}]", "0.a.0", "4")
+// 11: every created level is an object
+show jd_put_raw("{}", "a.b.c", "[1]")
+// 12: a digit segment creates an array holding one object
+show jd_put_raw("{\"a\":{}}", "a.b.0.c", "\"x\"")
+// 13: the digit segment creates the array itself
+show jd_put_raw("{}", "a.b.0", "7")
+// 14: index 0 creates an array, the value is data
+show jd_put_raw("{}", "a.0", "[1,2]")
+// 15: a created tail hangs off the root
+show jd_put_raw("{\"x\":1}", "a.b", "true")
+// 16: two nested array creations
+show jd_put_raw("{}", "a.b.0.0", "1")
+// 17: spacing of the replaced member
+show jd_put_raw("{ \"a\" : 1 , \"b\":2 }", "a", "9")
+// 18: an untouched number keeps its spelling
+show jd_put_raw("{\"a\":1e2}", "b", "2")
+// 19: a replaced number is replaced whole
+show jd_put_raw("{\"a\":1.50}", "a", "2")
+// 20: the first duplicate key wins
+show jd_put_raw("{\"a\":1,\"a\":2}", "a", "9")
+// 21: trailing whitespace after the root stays
+show jd_put_raw("{} ", "a", "1")
+// 22: a newline inside the object survives
+show jd_put_raw("{\"a\":\n  1\n}", "b", "2")
+// 23: escapes elsewhere are not decoded
+show jd_put_raw("{\"s\":\"a\\u0062c\"}", "t", "3")
+// 24: negative zero text is preserved
+show jd_put_raw("{\"n\":-0}", "m", "0")
+// 25: null is a value, not a missing member
+show jd_put_raw("{}", "a", "null")
+// 26: an index past the end is never padded
+show jd_put_raw("{\"a\":[1]}", "a.2", "2")
+// 27: a created array holds index 0 only
+show jd_put_raw("{\"a\":{}}", "a.b.1", "9")
+// 28: a scalar in the middle of a path is not retyped
+show jd_put_raw("{\"a\":1}", "a.b", "2")
+// 29: a named segment cannot index an array
+show jd_put_raw("{\"a\":[1]}", "a.b", "2")
+// 30: a named segment cannot index an empty array
+show jd_put_raw("{\"a\":[]}", "a.b", "2")
+// 31: a number root holds no members
+show jd_put_raw("1", "a", "2")
+// 32: a string root holds no members
+show jd_put_raw("\"text\"", "a", "2")
+// 33: the empty root array cannot be written past index 0
+show jd_put_raw("[]", "1", "2")
+// 34: a malformed document is refused
+show jd_put_raw("bad json", "a", "1")
+// 35: a malformed document is refused
+show jd_put_raw("{\"a\":}", "a", "1")
+// 36: a malformed value is refused
+show jd_put_raw("{}", "a", "bad")
+// 37: a value list is not one value
+show jd_put_raw("{}", "a", "1,")
+// 38: an unterminated string is refused
+show jd_put_raw("{}", "a", "\"unterminated")
+// 39: NaN is not JSON
+show jd_put_raw("{}", "a", "NaN")
+// 40: a leading zero number is not JSON
+show jd_put_raw("{}", "a", "01")
+// 41: a dangling exponent is not JSON
+show jd_put_raw("{}", "a", "1e")
+// 42: an empty segment is the empty key
+show jd_put_raw("{}", "a..b", "1")
+// 43: a key containing a dot cannot be addressed, so a new path is built
+show jd_put_raw("{\"a.b\":1}", "a.b", "2")
+// 44: a string value
+show jd_put_raw("{}", "a", "\"x\"")
+// 45: a boolean value
+show jd_put_raw("{}", "a", "true")
+// 46: a value keeps its own bytes verbatim
+show jd_put_raw("{}", "a", " 4 ")
+// 47: and so does a created value
+show jd_put_raw("{\"a\":{}}", "a.b", " 5 ")
+
+// The byte length of each result, so a truncation cannot hide behind a
+// line that happens to look right.
+show len(jd_put_raw("{\"a\":{}}", "a.b", "1"))
+show len(jd_put_raw("{\"a\":[1]}", "a.1", "2"))
+show len(jd_put_raw("{\"a\":[]}", "a.0", "1"))
+show len(jd_put_raw("{\"a\":{\"b\":[{\"c\":1}]}}", "a.b.0.d", "5"))
+show len(jd_put_raw("{\"a\":{\"b\":[{\"c\":1}]}}", "a.b.0.c", "5"))
+show len(jd_put_raw("[1,2]", "0", "9"))
+show len(jd_put_raw("[1,2]", "2", "9"))
+show len(jd_put_raw("[]", "0", "9"))
+show len(jd_put_raw("[[]]", "0.0", "3"))
+show len(jd_put_raw("[{\"a\":[]}]", "0.a.0", "4"))
+show len(jd_put_raw("{}", "a.b.c", "[1]"))
+show len(jd_put_raw("{\"a\":{}}", "a.b.0.c", "\"x\""))
+show len(jd_put_raw("{}", "a.b.0", "7"))
+show len(jd_put_raw("{}", "a.0", "[1,2]"))
+show len(jd_put_raw("{\"x\":1}", "a.b", "true"))
+show len(jd_put_raw("{}", "a.b.0.0", "1"))
+show len(jd_put_raw("{ \"a\" : 1 , \"b\":2 }", "a", "9"))
+show len(jd_put_raw("{\"a\":1e2}", "b", "2"))
+show len(jd_put_raw("{\"a\":1.50}", "a", "2"))
+show len(jd_put_raw("{\"a\":1,\"a\":2}", "a", "9"))
+show len(jd_put_raw("{} ", "a", "1"))
+show len(jd_put_raw("{\"a\":\n  1\n}", "b", "2"))
+show len(jd_put_raw("{\"s\":\"a\\u0062c\"}", "t", "3"))
+show len(jd_put_raw("{\"n\":-0}", "m", "0"))
+show len(jd_put_raw("{}", "a", "null"))
+show len(jd_put_raw("{\"a\":[1]}", "a.2", "2"))
+show len(jd_put_raw("{\"a\":{}}", "a.b.1", "9"))
+show len(jd_put_raw("{\"a\":1}", "a.b", "2"))
+show len(jd_put_raw("{\"a\":[1]}", "a.b", "2"))
+show len(jd_put_raw("{\"a\":[]}", "a.b", "2"))
+show len(jd_put_raw("1", "a", "2"))
+show len(jd_put_raw("\"text\"", "a", "2"))
+show len(jd_put_raw("[]", "1", "2"))
+show len(jd_put_raw("bad json", "a", "1"))
+show len(jd_put_raw("{\"a\":}", "a", "1"))
+show len(jd_put_raw("{}", "a", "bad"))
+show len(jd_put_raw("{}", "a", "1,"))
+show len(jd_put_raw("{}", "a", "\"unterminated"))
+show len(jd_put_raw("{}", "a", "NaN"))
+show len(jd_put_raw("{}", "a", "01"))
+show len(jd_put_raw("{}", "a", "1e"))
+show len(jd_put_raw("{}", "a..b", "1"))
+show len(jd_put_raw("{\"a.b\":1}", "a.b", "2"))
+show len(jd_put_raw("{}", "a", "\"x\""))
+show len(jd_put_raw("{}", "a", "true"))
+show len(jd_put_raw("{}", "a", " 4 "))
+show len(jd_put_raw("{\"a\":{}}", "a.b", " 5 "))
+
+// A created document reads back through the existing jd_* helpers, and a
+// refusal is empty and invalid rather than half-written.
+hold chk0 = jd_put_raw("{\"a\":{}}", "a.b", "1")
+show jd_valid(chk0)
+show jd_num(chk0, "a.b")
+show jd_len(chk0, "a")
+hold chk1 = jd_put_raw("{\"a\":{}}", "a.b.0.c", "\"x\"")
+show jd_valid(chk1)
+show jd_text(chk1, "a.b.0.c")
+show jd_len(chk1, "a.b")
+hold chk2 = jd_put_raw("{\"a\":[1]}", "a.1", "2")
+show jd_valid(chk2)
+show jd_num(chk2, "a.1")
+show jd_len(chk2, "a")
+hold chk3 = jd_put_raw("{}", "a.b.c", "[1]")
+show jd_valid(chk3)
+show jd_len(chk3, "a.b.c")
+show jd_num(chk3, "a.b.c.0")
+hold chk4 = jd_put_raw("[{}]", "0.a.0", "4")
+show jd_valid(chk4)
+show jd_num(chk4, "0.a.0")
+show jd_flag(chk4, "0.a")
+hold chk5 = jd_put_raw("{\"a\":1}", "a.b", "2")
+show jd_valid(chk5)
+show len(chk5)
+
+show "json-put-ok"

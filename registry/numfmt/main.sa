@@ -1,0 +1,95 @@
+// registry/numfmt -- exact decimal text for whole numbers.
+//
+// Sayanox numbers are IEEE doubles and `numstr` prints them with %g, so a big
+// integer comes out in exponent form ("1.23457e+09"). This package converts a
+// whole number digit by digit instead, which is exact for every integer the
+// double can hold without loss (up to 2^53) and keeps grouping predictable.
+// Prefix `pkgnf_`, dependency-free, portable across the three backends.
+
+// Bytes [a, b) of s, clamped. The package is dependency-free, so it carries its
+// own slice rather than pulling in `text`: a program that installs both must
+// not splice the same helper twice.
+make pkgnf_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold from = a
+  hold to = b
+  when from < 0 {
+    hold from = 0
+  }
+  when to > n {
+    hold to = n
+  }
+  hold out = ""
+  hold i = from
+  while i < to {
+    hold out = concat(out, chr(sx_index(s, i)))
+    hold i = i + 1
+  }
+  give out
+}
+
+// Decimal text of an integer, sign first, never an exponent.
+make pkgnf_istr(n: num) -> str {
+  when n == 0 {
+    give "0"
+  }
+  hold v = n
+  hold neg = 0
+  when v < 0 {
+    hold neg = 1
+    hold v = 0 - v
+  }
+  hold out = ""
+  while v > 0 {
+    hold d = v % 10
+    hold out = concat(chr(48 + d), out)
+    hold v = (v - d) / 10
+  }
+  when neg == 1 {
+    give concat("-", out)
+  }
+  give out
+}
+
+// The same text with a comma every three digits from the right.
+make pkgnf_commas(n: num) -> str {
+  hold t = pkgnf_istr(n)
+  hold neg = 0
+  hold digits = t
+  when len(t) > 0 {
+    when sx_index(t, 0) == 45 {
+      hold neg = 1
+      hold digits = pkgnf_slice(t, 1, len(t))
+    }
+  }
+  hold out = ""
+  hold grp = 0
+  hold i = len(digits)
+  while i > 0 {
+    hold i = i - 1
+    hold grp = grp + 1
+    when grp > 3 {
+      hold out = concat(",", out)
+      hold grp = 1
+    }
+    hold out = concat(chr(sx_index(digits, i)), out)
+  }
+  when neg == 1 {
+    hold out = concat("-", out)
+  }
+  give out
+}
+
+// Pad on the left with byte `fill` until the text is `width` bytes long.
+make pkgnf_pad(s: str, width: num, fill: num) -> str {
+  hold out = s
+  while len(out) < width {
+    hold out = concat(chr(fill), out)
+  }
+  give out
+}
+
+// A whole number as a fixed-width, comma-grouped field.
+make pkgnf_field(n: num, width: num) -> str {
+  give pkgnf_pad(pkgnf_commas(n), width, 32)
+}
