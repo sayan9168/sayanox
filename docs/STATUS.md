@@ -1,5 +1,40 @@
 # Status
 
+**2026-11-22 local R07 increment: INI/TOML-lite configuration, gated by an independent oracle**
+
+`stdlib/ini.sa` reads a `.ini`/`pyproject`-shaped document into a packed
+`stdlib/csv_table.sa` table of (section, key, value) and writes one back out: 22
+entry points over the 19 rule helpers they are built from, under nine documented
+rules - LF and CRLF alike, `;`/`#` commenting a whole line and never part of a
+value, `[name]` headers refused when empty because the default section is spelled
+by writing its members first, the first `=` splitting a member line, exactly five
+escape pairs inside a quoted value, a repeated key or section refused instead of
+resolved, and `ini_max_bytes()` (65536) on top of the csv_table caps - with
+malformed text answered by chr(33) rather than a partly-parsed table and
+`ini_write` quoting a value exactly when its raw bytes would not survive those
+rules. It is pinned by two frozen fixtures whose expected bytes were computed by
+a host-side model written from that rule text and never from a Sayanox run
+(`selfhost/stdlib_ini_test.sa` with 1,026 expectations and
+`selfhost/stdlib_ini_write_test.sa` with 335), every accepted document re-parsed
+by Python's `configparser` (32 of 33 agreeing member for member, the one
+divergence the documented default section). Two files because bounded
+`native_aot` pays one variable slot per top-level name and one patch slot per
+call site and the single fixture passed neither limit. Writing the oracle also
+measured a cost that keeps one boundary out of the pins: `ini_parse` checks every
+new member by scanning the table built so far, which the table-as-a-string
+representation copies as it walks, so the check is cubic in members (0.52 s at
+32, 3.60 s at 64, 26.09 s at 128) and a document large enough to reach the
+csv_table 1,024-row cap never finishes - the row cap stays pinned where it is
+imposed, and linearizing the member check is open work on this module rather than
+a claim this increment makes. `test-stdlib-next` runs both halves on seed-min,
+gen2, `native_aot` and `gen1_min` and requires all four to match the pinned bytes
+and each other, and six negative controls (header-row scan reading row 0,
+`ini_valid` ignoring its marker, the writer's quote clause disabled, a carriage
+return left undecoded, `ini_set` appending a default member behind every section,
+`ini_has_header` made unconditional) each make a family fail. Stdlib depth (R07)
+stays open: inline comments, value types, multi-line values, TOML tables and
+arrays and comment-preserving edits are not modelled.
+
 **2026-11-21 local R07 increment: CSV dialect sniffing and JSON path creation**
 
 Two stdlib gaps closed with frozen independent oracles. `stdlib/csv.sa` now
