@@ -99,7 +99,7 @@ with Python's `configparser` (`RawConfigParser`, `strict=True`, `delimiters=("="
 ## Acceptance
 
 The focused unit was used for iteration (~4 min/cycle instead of the whole chain),
-then the unmodified chain was run:
+then the unmodified chain was launched:
 
 ```
 ./sx target test-stdlib-ini      # the ini unit alone
@@ -121,12 +121,17 @@ $ echo $?
 0
 ```
 
-The whole chain, with the two ini families registered inside `ep_next()`:
-
-```
-$ ./sx target test-stdlib-next
-CHAIN-TBD
-```
+The whole chain, `./sx target test-stdlib-next`, was launched against this tree
+with the two ini families registered inside `ep_next()` and had not finished when
+the PR was opened — it rebuilds the Unicode, normalization, decimal and
+library-pack families on four backends before it reaches the ini unit, which sits
+at the end of `ep_next()` by construction. Its `[OK] sxbuild target:
+test-stdlib-next` line belongs here, copied from
+`/tmp/next_gate.log` or from the branch's `ci.yml` `migrated-gates` job (which
+starts with `sha256sum -c bootstrap/sx.sha256`, `./sx ci-guard` and
+`./sx verify-entry` and then runs the chain), and this paragraph is what to
+replace when it lands. The eight programs it asserts for this increment are
+exactly the eight the unit above ran.
 
 The unit takes 4 m 10 s wall, eight compile-and-run cycles. What costs time is the
 parse half on the two minimal backends, which is the price of a fixture this wide
@@ -136,16 +141,22 @@ in it 65,537 bytes.
 ## Negative controls
 
 Each one mutates `stdlib/ini.sa`, runs the gate, and is reverted; a control that
-passes is a hole in the oracle and is written down as one.
+passes is a hole in the oracle and is written down as one. The first four were run
+against the single-file fixture, before the split: their label is the family name
+the split keeps for the parse half, and the artifact prefix quoted in the third row
+(`ini_0`) is the pre-split name, which the loop now spells `ini_<half>_<backend>`.
+The last two were run against the pair, by rebuilding both halves and comparing
+each `.out` with its own `.want` — the byte comparison `ep_ini` asserts under those
+labels.
 
 | Control | Change | Gate result |
 | --- | --- | --- |
 | header-row scan | `ini_find` reads row 0 as a member | `[FAIL] INI configuration independent oracle` |
 | refusal marker | `ini_valid` returns 1 without looking at chr(33) | `[FAIL] INI configuration independent oracle` |
-| writer quoting | the leading-space quote clause disabled | `[FAIL] … ini_0: got 1, want 0` (the crash on a string index past the end is the refusal propagating) |
+| writer quoting | the leading-space quote clause disabled | `[FAIL] … ini_0: got 1, want 0` (`ini_0_0` after the split; the crash on a string index past the end is the refusal propagating) |
 | rule 5 decoding | a `\r` escape left undecoded | `[FAIL] INI configuration independent oracle` |
-| default head placement | `ini_set` appends a new default member instead of inserting it at row 0 | `[FAIL] INI writer mutation independent oracle` — 5 lines of the mutation half move (`0 0 3 339` shift past each other), the parse half unaffected, so the pin belongs to the writer family and only the writer family |
-| header predicate | `ini_has_header` made to `give 1` | `[FAIL]` on *both* families: the parse half at line 893 (`ini_section_count` of a `ct_filter_eq` table: 2 where the model says 1) and the mutation half at its foreign-table block — the predicate is the only thing separating an ini table from any other csv_table |
+| default head placement | `ini_set` appends a new default member instead of inserting it at row 0 | the writer half diverges in 5 lines (`0 0 3 339` shift past each other) while the parse half stays byte-exact — so the only pin for this property lives in `INI writer mutation independent oracle`, and exactly that one family fails it |
+| header predicate | `ini_has_header` made to `give 1` | *both* halves diverge: the parse half at line 893 (`ini_section_count` of a `ct_filter_eq` table answers 2 where the model says 1) and the writer half at its foreign-table block — the predicate is the only thing separating an ini table from any other csv_table, so both `[FAIL]` labels fire |
 
 Backends, from the gate's own artifacts — `selfhost/seed_tests/stdlib_next/`, one
 binary and one `.out` per backend per half, each `.out` compared with its own `.want`
