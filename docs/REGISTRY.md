@@ -188,12 +188,58 @@ or `sxpkg: verify FAILED (N problem(s))` and exits non-zero otherwise. With no
 ```sh
 ./tools/sxpkg verify
 ./tools/sxpkg sum registry/math/main.sa
-make test-registry-sums   # every pkg.meta sum= matches its main.sa
+make test-registry-sums   # the index, the sums and a real build per package
 ```
 
 The sums are regenerated when a package changes (`sxpkg sum` on the new
 `main.sa`, then update `sum=`). `test-pkgs` edits the project's registry copy to show the mismatch,
 then re-seeds the project to restore it.
+
+`test-registry-sums` takes its list from `registry/INDEX` rather than from a
+list kept inside the gate. For every indexed name it requires
+`registry/<name>/pkg.meta` to exist with `name=` equal to the directory and
+`version=` equal to the index pin, re-derives `sum=` with `sxpkg sum`, and then
+writes a one-line program that does `use ".sayanox/registry/<name>/main.sa"`,
+calls into the package, compiles it with gen2 from a project holding its own
+copy of `registry/`, and compares the program's stdout with the expected bytes
+written down beside the probe. A directory under `registry/` that is not in the
+index fails the same gate, so a package cannot be unpublished quietly. Adding a
+package therefore means adding it to the index; there is nothing else to
+remember to update.
+
+## What is published
+
+| Package | Version | Sum | Contents |
+| --- | --- | --- | --- |
+| `hello` | 0.1.0 | `522968026` | `show "hello from pkg"` — the shape of a package |
+| `math` | 0.1.0 | `718013937` | `dbl`, `sqr` |
+| `strings` | 0.1.0 | `120085778` | `greet` |
+| `calc` | 0.1.0 | `807763569` | `dblsqr`, with `deps=math@0.1.0` |
+| `text` | 0.1.0 | `621150026` | `pkgtext_slice`, `pkgtext_words`, `pkgtext_flatten`, `pkgtext_repeat`, `pkgtext_title`, `pkgtext_starts` |
+| `numfmt` | 0.1.0 | `609229368` | `pkgnf_slice`, `pkgnf_istr`, `pkgnf_commas`, `pkgnf_pad`, `pkgnf_field` |
+| `kv` | 0.1.0 | `978421545` | `pkgkv_count`, `pkgkv_value`, `pkgkv_has`, `pkgkv_num`, with `deps=text@0.1.0` |
+
+`numfmt` and `text` exist because the language's own printing is `%g`-shaped and
+its builtin list (`docs/BUILTINS.md`) has no slice: `pkgnf_istr(1234567890123)`
+is the exact thirteen digits `show` will not give you, and each package carries
+the small byte-level helper it needs instead of assuming a standard library the
+consumer may not have installed. `kv` is the second package with a dependency,
+so `sxpkg add kv 0.1.0` resolves `text@0.1.0` alongside it.
+
+Two rules keep published packages usable. A package's names are prefixed
+`pkg<name>_`, because `use` splices one file into another and a bare `slice`
+would collide with anything in the host program. And a package may use only the
+builtins, never a `stdlib/` module or another package's helper that it has not
+declared — `test-registry-sums` builds every package through a probe with
+`selfhost/gen2`, whose front end refuses an unknown function instead of
+guessing, so a package that reaches for something a consumer will not have is
+caught here rather than in that consumer's project.
+
+Only `hello` and `math` are in the offline seed: `sxpkg seed` writes those two
+into a fresh project's `.sayanox/registry/`, which is the path
+`./tools/sxpkg init` documents and `test-sxpkg-wrapper` pins. The rest of the
+table is published, installable from `registry/` with `install`/`install-local`,
+and gated from there; a fresh `init` still needs `sxpkg add` to reach them.
 
 ## Dependencies and the offline install
 

@@ -1,0 +1,5 @@
+name=text
+version=0.1.0
+desc=word counting and small byte-text helpers
+deps=
+sum=621150026

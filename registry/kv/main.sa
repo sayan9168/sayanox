@@ -1,0 +1,111 @@
+// registry/kv -- "key=value" pair lists, the shape a config line or a query
+// string takes. Pairs are separated by one byte (59 for ";", 38 for "&", 9 for
+// TAB); within a pair the first "=" splits key from value, and a value may
+// itself contain "=".
+//
+// The pair count is computed by flattening the separators to spaces and
+// counting words, which is why this package depends on `text`: the same word
+// counter is what a caller can trust for both jobs.
+use ".sayanox/registry/text/main.sa"
+
+// Number of pairs in the list. An empty list has none.
+make pkgkv_count(line: str, sep: num) -> num {
+  give pkgtext_words(pkgtext_flatten(line, sep))
+}
+
+// The value that belongs to key, or the empty string when the pair is absent.
+// A pair whose key is empty, whose value part is missing, or whose key does not
+// match is skipped.
+make pkgkv_value(line: str, key: str, sep: num) -> str {
+  hold n = len(line)
+  hold i = 0
+  hold out = ""
+  hold more = 1
+  while more == 1 {
+    hold again = 1
+    hold j = i
+    hold scan = 1
+    while scan == 1 {
+      when j >= n {
+        hold scan = 0
+      } otherwise {
+        when sx_index(line, j) == sep {
+          hold scan = 0
+        } otherwise {
+          hold j = j + 1
+        }
+      }
+    }
+    hold eq = 0 - 1
+    hold p = i
+    while p < j {
+      when eq < 0 {
+        when sx_index(line, p) == 61 {
+          hold eq = p
+        }
+      }
+      hold p = p + 1
+    }
+    when eq > i {
+      when string_eq(pkgtext_slice(line, i, eq), key) == 1 {
+        hold out = pkgtext_slice(line, eq + 1, j)
+        hold again = 0
+      }
+    }
+    when again == 1 {
+      when j >= n {
+        hold again = 0
+      } otherwise {
+        hold i = j + 1
+      }
+    }
+    when again == 0 {
+      hold more = 0
+    }
+  }
+  give out
+}
+
+// 1 when the key is present with a non-empty value.
+make pkgkv_has(line: str, key: str, sep: num) -> num {
+  hold v = pkgkv_value(line, key, sep)
+  when len(v) == 0 {
+    give 0
+  }
+  give 1
+}
+
+// The value read as a whole number; 0 when the key is absent. Sayanox has no
+// string-to-number builtin, so this scans the digits itself and stops at the
+// first byte that is not a digit, which keeps "12x" from becoming a surprise.
+make pkgkv_num(line: str, key: str, sep: num) -> num {
+  hold t = pkgkv_value(line, key, sep)
+  hold v = 0
+  hold i = 0
+  hold sign = 1
+  when len(t) > 0 {
+    when sx_index(t, 0) == 45 {
+      hold sign = 0 - 1
+      hold i = 1
+    }
+  }
+  hold more = 1
+  while more == 1 {
+    when i >= len(t) {
+      hold more = 0
+    } otherwise {
+      hold c = sx_index(t, i)
+      when c < 48 {
+        hold more = 0
+      } otherwise {
+        when c > 57 {
+          hold more = 0
+        } otherwise {
+          hold v = v * 10 + (c - 48)
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give sign * v
+}

@@ -336,3 +336,216 @@ make csv_is_valid_row_d(line: str, delim: num) -> num {
 make csv_is_valid_row(line: str) -> num {
   give csv_is_valid_row_d(line, 44)
 }
+
+// ---- dialect sniffing -----------------------------------------------------
+//
+// csv_sniff answers which single-byte delimiter a sample of text was written
+// with, or -1 when no candidate is supported well enough to say. The candidate
+// set is comma 44, TAB 9, semicolon 59 and pipe 124, which is exactly the set
+// the _d helpers accept; csv_sniff_list takes a caller-supplied candidate list
+// and uses the caller's order to break ties.
+//
+// The rule is mechanical, not statistical, so a wrong guess is reproducible:
+//   1. A sample is split into lines at LF, a trailing CR is dropped and empty
+//      lines are ignored. At most the first 4096 bytes and the first 64
+//      non-empty lines of the sample are looked at, and a caller-supplied
+//      bound larger than the sample is clamped to the sample.
+//   2. A candidate matches when every line holds the same number of unquoted
+//      separator bytes, at least one, and every line is a valid row under
+//      csv_is_valid_row_d for that delimiter. A byte counts as unquoted when
+//      it sits outside a quoted field: a field is quoted when it begins with
+//      chr(34), and a doubled quote inside such a field is an escaped quote.
+//   3. The winner is the matching candidate with the most unquoted separators
+//      per line; a tie keeps the earlier candidate.
+//
+// One line holding one separator already matches, so a sample should carry more
+// than one row. Nothing here looks at file names, header words or data types.
+
+// Unquoted occurrences of d in one CSV line. Returns the separator count, which
+// is one less than the field count for a well-formed row.
+make csv_sep_count(line: str, d: num) -> num {
+  hold n = len(line)
+  hold i = 0
+  hold cnt = 0
+  hold quoted = 0
+  hold fresh = 1
+  while i < n {
+    hold c = sx_index(line, i)
+    hold extra = 0
+    when quoted == 0 {
+      when c == d {
+        hold cnt = cnt + 1
+        hold fresh = 1
+      } otherwise {
+        when fresh == 1 {
+          when c == 34 {
+            hold quoted = 1
+          }
+        }
+        hold fresh = 0
+      }
+    } otherwise {
+      when c == 34 {
+        hold nxt = 0
+        when i + 1 < n {
+          hold nxt = sx_index(line, i + 1)
+        }
+        when nxt == 34 {
+          hold extra = 1
+        } otherwise {
+          hold quoted = 0
+        }
+      }
+    }
+    hold i = i + 1
+    when extra == 1 {
+      hold i = i + 1
+    }
+  }
+  give cnt
+}
+
+// One line of a sample, cut at [a, b) with a trailing CR dropped. The empty
+// string when the range is empty, which is how a blank line stays blank.
+make csv_line_cut(sample: str, a: num, b: num) -> str {
+  hold n = len(sample)
+  hold last = b
+  when last > n {
+    hold last = n
+  }
+  when last > a {
+    when sx_index(sample, last - 1) == 13 {
+      hold last = last - 1
+    }
+  }
+  give csv_sub(sample, a, last)
+}
+
+// The first line of a sample: up to the first LF, without a trailing CR. The
+// empty string when the sample starts with a line break or is empty.
+make csv_first_line(sample: str) -> str {
+  hold n = len(sample)
+  hold end = 0
+  hold run = 1
+  while run == 1 {
+    when end >= n {
+      hold run = 0
+    } otherwise {
+      when sx_index(sample, end) == 10 {
+        hold run = 0
+      } otherwise {
+        hold end = end + 1
+      }
+    }
+  }
+  give csv_line_cut(sample, 0, end)
+}
+
+// Number of non-empty lines that agree with the first line's separator count
+// under d, or -1 when any line disagrees or fails to parse. Returns -1 when the
+// agreeing count is zero or the separator count is zero, because a sample with
+// no separator byte says nothing about a dialect.
+make csv_sniff_lines(sample: str, bound: num, d: num) -> num {
+  hold i = 0
+  hold stop = bound
+  hold n = len(sample)
+  when stop > n {
+    hold stop = n
+  }
+  hold seen = 0
+  hold rows = 0
+  hold want = 0 - 1
+  hold bad = 0
+  while i < stop {
+    hold eol = i
+    hold scan = 1
+    while scan == 1 {
+      when eol >= stop {
+        hold scan = 0
+      } otherwise {
+        when sx_index(sample, eol) == 10 {
+          hold scan = 0
+        } otherwise {
+          hold eol = eol + 1
+        }
+      }
+    }
+    hold line = csv_line_cut(sample, i, eol)
+    hold i = eol + 1
+    when len(line) > 0 {
+      hold seen = seen + 1
+      hold cnt = csv_sep_count(line, d)
+      when want < 0 {
+        hold want = cnt
+      }
+      when cnt != want {
+        hold bad = 1
+      }
+      when csv_is_valid_row_d(line, d) == 0 {
+        hold bad = 1
+      }
+      when bad == 1 {
+        hold stop = i
+      }
+      when bad == 0 {
+        hold rows = rows + 1
+        when seen == 64 {
+          hold stop = i
+        }
+      }
+    }
+  }
+  when bad == 1 {
+    give 0 - 1
+  }
+  when want < 1 {
+    give 0 - 1
+  }
+  give rows
+}
+
+// The delimiter byte a sample was written with, or -1. The candidate list is
+// tried in order and an illegal delimiter candidate is skipped rather than
+// guessed around.
+make csv_sniff_list(sample: str, cands: list) -> num {
+  hold bound = len(sample)
+  when bound > 4096 {
+    hold bound = 4096
+  }
+  hold head = csv_first_line(sample)
+  hold best = 0 - 1
+  hold best_seps = 0
+  hold k = 0
+  while k < len(cands) {
+    hold d = cands[k]
+    when csv_delim_ok(d) == 1 {
+      hold rows = csv_sniff_lines(sample, bound, d)
+      when rows > 0 {
+        hold seps = csv_sep_count(head, d)
+        when seps > best_seps {
+          hold best_seps = seps
+          hold best = d
+        }
+      }
+    }
+    hold k = k + 1
+  }
+  give best
+}
+
+make csv_sniff(sample: str) -> num {
+  hold cands = [44, 9, 59, 124]
+  give csv_sniff_list(sample, cands)
+}
+
+// One-step convenience: sniff the sample, then parse a whole line with the
+// delimiter that was found. The empty string when the dialect is unknown or
+// the row does not parse, so a caller never has to pass -1 to csv_parse_row_d.
+make csv_parse_row_sniff(line: str, sample: str) -> str {
+  hold cands = [44, 9, 59, 124]
+  hold d = csv_sniff_list(sample, cands)
+  when d < 0 {
+    give ""
+  }
+  give csv_parse_row_d(line, d)
+}

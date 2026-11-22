@@ -1,0 +1,36 @@
+// Reading a delimited file that never told you its separator. csv_sniff answers
+// the delimiter byte a sample was written with, or -1 when the sample does not
+// say; csv_parse_row_sniff sniffs and parses in one step, so a -1 never reaches
+// csv_parse_row_d. The rule is mechanical, so a wrong guess is reproducible --
+// and an ambiguous sample is refused instead of defaulted to a comma.
+//
+// Build: ./selfhost/gen2 examples/csv_sniff.sa /tmp/sniff.c
+//        cc -std=gnu11 -O2 -o /tmp/sniff /tmp/sniff.c -lm && /tmp/sniff
+use "stdlib/csv.sa"
+
+// A TSV export. The comma in the note is ordinary data, and the TAB inside the
+// quoted field on the third row does not count either: a separator is counted
+// only outside a quoted field, and a field is quoted only when it *begins* with
+// a quote -- which is why a quote in the middle of `a"b` is a refusal, not data.
+hold tsv = "name\tnote\nwidget\tred, large\n\"gadget\"\t\"two\ttabs\"\n"
+show csv_sniff(tsv)
+show csv_delim_ok(csv_sniff(tsv))
+show csv_count(csv_parse_row_sniff("name\tnote", tsv))
+show csv_at(csv_parse_row_sniff("widget\tred, large", tsv), 1)
+
+// A semicolon export, the shape a European spreadsheet writes. Three columns on
+// every line, so semicolon (59) beats comma (44), which only fits one line.
+hold semi = "id;name;qty\n1;widget;3\n2;gadget;7\n"
+show csv_sniff(semi)
+show csv_parse_row_sniff("1;widget;3", semi)
+
+// Densest candidate wins: the pipe explains two separators per line here, the
+// comma explains one, and both would be accepted on their own.
+hold both = "a|b|c,d\n1|2|3,4\n"
+show csv_sniff(both)
+
+// One column says nothing about a dialect, so it is a refusal. A blank or
+// unterminated sample is too.
+show csv_sniff("widget\ngadget\n")
+show len(csv_parse_row_sniff("widget", "widget\ngadget\n"))
+show csv_sniff("a,\"b\n")

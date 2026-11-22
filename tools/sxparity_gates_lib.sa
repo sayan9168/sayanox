@@ -49,6 +49,55 @@ make ep_snippet(source: str, want: str, base: str) -> num {
   give 0
 }
 
+// CSV dialect sniffing and JSON path creation: two stdlib surfaces whose
+// expectations come from outside Sayanox, each compiled and run on seed-min,
+// gen2, native_aot and gen1_min, and required to agree with the frozen oracle
+// and with each other. Split out of ep_next so it can be run on its own.
+make ep_sniff_create() -> num {
+  hold dir = "selfhost/seed_tests/stdlib_next"
+  hold created = gl_ensure_dir(dir)
+    // Dialect sniffing: which single-byte delimiter a sample was written with,
+    // decided by the mechanical rule stdlib/csv.sa documents (agreement across
+    // every line, at least one unquoted separator, a row that parses). The
+    // expectations come from a Python model of that rule, not from Sayanox, and
+    // all four C/native backends must produce the same bytes.
+    hold sn_src = "selfhost/stdlib_csv_sniff_test.sa"
+    hold sn_want = "selfhost/stdlib_csv_sniff.want"
+    hold sn_present = bt_require_file(sn_want)
+    hold sn_kind = 0
+    while sn_kind < 4 {
+      hold sn_bin = concat(concat(dir, "/csv_sniff_"), gl_istr(sn_kind))
+      hold sn_c = ep_compile(sn_kind, sn_src, sn_bin)
+      hold sn_r = pg_capture(sh_quote(sn_bin), concat(sn_bin, ".out"))
+      hold sn_a = gl_assert_files_eq(concat(sn_bin, ".out"), sn_want, "CSV dialect sniffing independent oracle")
+      when sn_kind > 0 {
+        hold sn_p = gl_assert_files_eq(concat(dir, "/csv_sniff_0.out"), concat(sn_bin, ".out"), "CSV dialect sniffing backend parity")
+      }
+      sn_kind = sn_kind + 1
+    }
+
+    // jd_put_raw: set a value at a dotted path, creating every missing container
+    // and inferring object or array from the segment that indexes into it. The
+    // expected bytes are hand-written from the contract and then checked against
+    // a Python byte model and a Python semantic edit of the same rule, so a
+    // refusal and a half-written document cannot be confused.
+    hold jp_src = "selfhost/stdlib_json_put_test.sa"
+    hold jp_want = "selfhost/stdlib_json_put.want"
+    hold jp_present = bt_require_file(jp_want)
+    hold jp_kind = 0
+    while jp_kind < 4 {
+      hold jp_bin = concat(concat(dir, "/json_put_"), gl_istr(jp_kind))
+      hold jp_c = ep_compile(jp_kind, jp_src, jp_bin)
+      hold jp_r = pg_capture(sh_quote(jp_bin), concat(jp_bin, ".out"))
+      hold jp_a = gl_assert_files_eq(concat(jp_bin, ".out"), jp_want, "JSON path creation independent oracle")
+      when jp_kind > 0 {
+        hold jp_p = gl_assert_files_eq(concat(dir, "/json_put_0.out"), concat(jp_bin, ".out"), "JSON path creation backend parity")
+      }
+      jp_kind = jp_kind + 1
+    }
+  give 0
+}
+
 make ep_next() -> num {
   hold dir = "selfhost/seed_tests/stdlib_next"
   hold created = gl_ensure_dir(dir)
@@ -475,6 +524,8 @@ make ep_next() -> num {
     }
     rg_kind = rg_kind + 1
   }
+
+  hold snjp = ep_sniff_create()
 
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
