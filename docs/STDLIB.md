@@ -19,6 +19,7 @@ by a `./sx target` gate; the backend columns below say what is verified.
 | `stdlib/json_write.sa` | nested JSON writer, functional object mutator (`jw_obj_set`, `jw_obj_del`), minifier (`jw_minify`) and multi-level pretty-printer (`jw_pretty`), round-tripping through `json_deep.sa`; boundary/precision oracle in `selfhost/stdlib_json_boundary.want` | seed-min, gen2, native | `test-stdlib-json-write`, `test-stdlib-next` |
 | `stdlib/crypto.sa` | SHA-256 and HMAC-SHA256 (`cx_sha256`, `cx_sha256_list`, `cx_sha256_raw`, `cx_hmac`, `cx_hmac_list`, `cx_hmac_raw`, `cx_hex`, `cx_hex_byte`, `cx_unhex`, `cx_bytes`, `cx_eq_hex`); FIPS 180-4 and RFC 4231 vectors, cross-checked against `sha256sum` when it is installed | seed-min, gen2, native | `test-stdlib-crypto` |
 | `stdlib/csv.sa` | RFC 4180-style CSV **row** codec (`csv_parse_row`, `csv_is_valid_row`, `csv_write_row`, `csv_ok`, `csv_count`, `csv_at`, `csv_push`, `csv_empty`, `csv_needs_quote`, `csv_quote`); quoted fields, embedded separators/CR/LF, doubled quotes, three malformed-row refusals; delimiter-parameterized `_d` variants and `csv_delim_ok` for TSV/semicolon/pipe; `csv_sniff`/`csv_parse_row_sniff` pick the separator from an unlabelled sample | seed-min, gen2, native | `test-stdlib-csv`, `test-stdlib-next` |
+| `stdlib/ini.sa` | INI and TOML-lite configuration text, read into a packed `csv_table.sa` table of (section, key, value) and written back canonical: `ini_parse`/`ini_valid`/`ini_get_text`, `ini_count`/`ini_has`/`ini_value`/`ini_find`/`ini_find_section`, `ini_section_count`/`ini_section_at`/`ini_key_count`/`ini_key_at`, `ini_new`/`ini_header_row`/`ini_default_section`/`ini_max_bytes`, functional `ini_set`/`ini_unset`/`ini_drop_section`/`ini_empty`, and `ini_write`/`ini_round_trips`; LF and CRLF alike, whole-line `;`/`#` comments and no inline comment, quoted values with the five escape pairs of rule 5, a repeated key or section refused instead of resolved, a 65536-byte input cap and the `csv_table.sa` caps on top, malformed text answered with chr(33) rather than a partly-parsed table; 41 `make` definitions (22 entry points and 19 rule helpers) | seed-min, gen2, native_aot, gen1_min | `test-stdlib-next` |
 | `stdlib/csv_table.sa` | whole CSV documents, validated packed tables, updates, filtering and projection; `ct_parse_d`/`ct_write_d` read and write any supported delimiter | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/csv_stream.sa` | incremental RFC 4180 reading (`cs_*`) over `stdlib/csv.sa`: `cs_feed`/`cs_feed_d` take a chunk and return the status, the leftover state and the completed rows, so memory is bounded by the longest record instead of the document; quoted CRLF and doubled quotes may be split across any chunk boundary, CRLF and bare LF terminate identically, `cs_flush` refuses an unterminated quoted field instead of inventing a record, and a record past `cs_max_bytes()` (64 KiB) is refused rather than buffered without bound | seed-min, gen2, native | `test-stdlib-next` |
 | `stdlib/uident.sa` | UAX #31 identifier syntax (`uid_*`) over `stdlib/utf8.sa`: `uid_xid_start`/`uid_xid_continue` for one code point from the Unicode 17.0.0 `DerivedCoreProperties.txt` tables (779 XID_Start ranges, 1422 XID_Continue ranges), `uid_valid` for a whole string with the explicit leading-underscore rule, `uid_valid_nfkc` for the stricter NFKC reading UAX #31 asks for, `uid_valid_list`, and `uid_same` for same-after-NFKC; `uid_valid` is the property-only answer that agrees with CPython's `str.isidentifier` | seed-min, gen2, native | `test-stdlib-next` |
@@ -1797,3 +1798,92 @@ field), which is this codec's documented refusal and is written down as such
 instead of being hidden. The fixtures are frozen: nothing regenerates them at
 gate time, and `test-stdlib-next` requires all four backends to produce those
 exact bytes and to agree with each other.
+
+## Configuration files (2026-11-22)
+
+A `.ini` or `pyproject`-shaped file is the most common thing a program has to
+read that is not JSON, and neither `stdlib/json_deep.sa` nor `stdlib/csv.sa`
+answers it: a configuration file has sections, an unlabelled `key = value` form,
+comments, and values that a CSV reader would split on the comma inside
+`select = "E, W"`. `stdlib/ini.sa` reads one into a `stdlib/csv_table.sa` table
+and writes it back out.
+
+```sayanox
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+use "stdlib/ini.sa"
+hold cfg = "[deps]\nmath = 0.1.0\n"
+show ini_valid(cfg)                          // 1
+show ini_count(ini_parse(cfg))               // 1
+show ini_value(ini_parse(cfg), "deps", "math")  // 0.1.0
+show ini_round_trips(cfg)                    // 1
+```
+
+Because the parsed document **is** a table, everything the CSV layer already
+does to a table works on a configuration file: `ct_row`, `ct_cell`, `ct_select`
+and `ct_filter_eq` answer "every dependency of this file" without `ini.sa`
+knowing about the question, and `ini_write` is the inverse direction.
+
+The rules the module documents, each one pinned:
+
+* A line ends at chr(10) and a trailing chr(13) is dropped, so LF and CRLF files
+  parse identically (rule 1). An empty line is skipped, and so is a line whose
+  first non-space byte is `;` or `#` — a *line*, so a marker inside a value is
+  data and there are no inline comments (rule 2).
+* `[name]` names a section; only spaces may follow the closing bracket, and a
+  header with no name in it is refused, because the default section is spelled by
+  writing its members before any header (rule 3, `ini_default_section()`).
+* The first `=` splits a member line; a line without one, an empty key, and a key
+  holding a bracket or a line byte are refused (rule 4).
+* A value that both starts and ends with `chr(34)` loses those bytes and decodes
+  `\\`, `\"`, `\n`, `\r`, `\t`; any other backslash inside it is refused, and a
+  quote in the middle of a value is ordinary data (rule 5).
+* A repeated key in one section and a repeated section header are refused rather
+  than resolved, so a reader never silently picks one of two spellings (rule 7).
+* Sections are enumerated in order of first appearance with the default section
+  first (rule 8), which is what makes `ini_section_at(table, 0)` the empty string
+  and `ini_set` put a new default member at the **head** of the table — the place
+  `ini_write` prints it, ahead of the first header line.
+* `ini_write` quotes a value exactly when the raw bytes would not survive the
+  rules above (rule 9), which is why a value may begin with `;` or `#` unquoted,
+  and why a comment line read from a file does not come back out: the table has
+  nowhere to put it. `ini_round_trips` compares tables, not text, so that last
+  loss is visible in `ini_write` and does not make a round trip fail.
+
+Malformed input is refused, never repaired: `ini_parse` gives the single byte
+chr(33), which no valid table starts with, and the lookups answer `""` or `-1`
+for a table that is not a table. The input is capped at `ini_max_bytes()`
+(65536), and the `csv_table.sa` caps apply on top — a document whose members
+overflow the 1,024 rows a table can hold is refused outright, not truncated.
+That row cap is pinned *where it is imposed*, by the `csv_table.sa` oracle:
+reaching it through `ini_parse` needs a document of 1,023 members, and
+`ini_parse` pays for every member a scan of the table built so far, which the
+table-as-a-string representation copies as it walks (measured on the gen2
+build: 0.5 s at 32 members, 3.6 s at 64, 26 s at 128 — cubic, so a cap-sized
+document never finishes inside a gate budget). The ini oracle therefore pins
+the byte cap at both boundaries and a generated 32-member document, and
+`docs/REMAINING_WORK.md` carries the cost. Nothing lower-cases a key or a
+section: a file that wants case-insensitive lookups folds both sides through
+`stdlib/ucase.sa` at the call site. `examples/ini_config.sa` is a runnable tour
+of reading, asking, changing and saving one file.
+
+### Verification
+
+| Fixture | Rows | What it pins | Backends |
+| --- | --- | --- | --- |
+| `selfhost/stdlib_ini_test.sa` | 1,026 (`selfhost/stdlib_ini.want`, 1,026 lines) | every rule above one line at a time (acceptance and refusal, the 65536-byte cap at both boundaries, a generated 32-member document, and a UTF-8 value that costs more bytes than characters) | seed-min, gen2, native_aot, gen1_min |
+| `selfhost/stdlib_ini_write_test.sa` | 335 (`selfhost/stdlib_ini_write.want`, 335 lines) | `ini_set`/`ini_unset`/`ini_drop_section` rebuilt step by step against a model of the same rules and re-read through `ct_row_count`/`ct_cell`, a comment marker inside a value, section order, and a table handed over by `ct_filter_eq` — which has no header row, so no default section is invented for it | seed-min, gen2, native_aot, gen1_min |
+
+Two files because bounded `native_aot` gives a program one slot per top-level
+name and one patch slot per call site, and the single fixture passed neither
+limit; the pair is the same checks cut at a block boundary.
+
+The expectations were computed outside Sayanox, by a host-side model written
+from the rule text and never from the module's output; the accepted documents
+were then re-parsed with Python's `configparser` (`RawConfigParser`, strict, `=`
+as the only delimiter). 33 documents are accepted by the oracle, 32 agree with
+`configparser` member for member, and the one divergence is the documented
+default section: members written before any header, which `configparser` refuses
+with `MissingSectionHeaderError` and rule 6 reads. Both `.sa` and `.want` are
+frozen — nothing regenerates them at gate time — and `test-stdlib-next` requires
+all four backends to produce those exact bytes and to agree with each other.

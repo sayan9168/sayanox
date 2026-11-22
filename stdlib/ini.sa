@@ -1,0 +1,972 @@
+// stdlib/ini.sa -- INI and TOML-lite configuration text, read into a packed
+// table and written back out (prefix ini_).
+//
+// Import stdlib/csv.sa and stdlib/csv_table.sa before this module. A parsed
+// document is a csv_table.sa table whose three columns are section, key and
+// value, in document order, behind a header row -- so every table operation the
+// CSV layer already has (ct_row, ct_cell, ct_filter_eq, ct_select, ct_write)
+// works on a configuration file, and ini_write is the inverse direction.
+//
+// A configuration file is small and it is read whole: input is capped at
+// ini_max_bytes() (65536) bytes, and the csv_table.sa caps still apply (1024
+// data rows, 262144 bytes). Malformed input is refused, never repaired:
+// ini_parse gives the single byte chr(33), which no valid table starts with,
+// and the lookups answer the empty string or -1 for a table that is not a table.
+//
+// The rules, each one pinned by selfhost/stdlib_ini_test.sa:
+//
+//   1. A line ends at chr(10); a trailing chr(13) is dropped, so LF and CRLF
+//      files parse identically.
+//   2. An empty line is skipped, and so is a line whose first non-space byte is
+//      chr(59) or chr(35). No other line is a comment, and there is no inline
+//      comment: a semicolon inside a value is data.
+//   3. A line whose first non-space byte is chr(91) is a section header, named
+//      by the bytes up to the first chr(93) with spaces trimmed. Only spaces may
+//      follow the closing bracket, and a header with no name in it is refused:
+//      the default section is spelled by writing its members before any header,
+//      never by an empty one. ini_set and ini_drop_section accept the empty
+//      name for that section, and ini_write omits its header line.
+//   4. Any other non-empty line is a member. The first chr(61) splits key from
+//      value; the key loses its spaces, the value its leading and trailing
+//      ones. An empty key is refused, and so is a line with no chr(61).
+//   5. A value that begins and ends with chr(34) has those two bytes removed
+//      and the escape pairs backslash backslash, backslash quote, backslash n,
+//      backslash r and backslash t decoded. Any other backslash inside such a
+//      value is refused, and so is a backslash that has no byte after it. A
+//      value that only starts with a quote is ordinary data, exactly as an
+//      unquoted value is, so a quote byte in the middle of a value costs
+//      nothing and needs no doubling.
+//   6. Members written before any section header belong to the section whose
+//      name is the empty string, ini_default_section().
+//   7. A repeated key inside one section and a repeated section header are both
+//      refused, so ini_parse never has to choose between two spellings of one
+//      setting and ini_write can never merge them by accident.
+//   8. Sections are enumerated in order of first appearance, with the default
+//      section first: ini_section_at(table, 0) is the empty string and
+//      ini_section_count counts it even when no member names it, because
+//      ini_write gives it the head of the file. That holds of a table carrying
+//      the header row ini_new gives it -- the one thing that tells an ini table
+//      from any other csv_table -- and a table that came from somewhere else, a
+//      ct_filter_eq result say, is enumerated from its member rows alone.
+//   9. ini_write quotes a value exactly when ini_needs_quote says the raw bytes
+//      would not survive rules 1 to 7, which is why a value may begin with a
+//      comment marker unquoted: a written member line begins with its key.
+//
+// Byte strings, like the rest of the stdlib: a UTF-8 rune is several bytes and
+// stays several bytes. Nothing lower-cases a key or a section -- a file that
+// wants case-insensitive lookups can fold both sides through stdlib/ucase.sa at
+// the call site. ini_write quotes a value exactly when the raw bytes would not
+// survive the rules above, so parsing what was written keeps every row intact.
+
+make ini_max_bytes() -> num {
+  give 65536
+}
+
+// The section a member with no section header belongs to.
+make ini_default_section() -> str {
+  give ""
+}
+
+// 1 when s names that section. It is spelled the empty string, which is what a
+// member row of the default section carries in its section column.
+make ini_is_default(s: str) -> num {
+  give len(s) == 0
+}
+
+// 1 when row 0 of the table is the ini header row, which is the only thing that
+// tells an ini table apart from any other csv_table, and the row that makes the
+// default section exist even when no member names it. A table that did not come
+// from ini_new -- one handed over by ct_filter_eq, say -- starts with a member
+// row instead, and then the default section is only counted when a row of its
+// own spells it.
+make ini_has_header(table: str) -> num {
+  when ct_valid(table) == 0 {
+    give 0
+  }
+  when ct_row_count(table) < 1 {
+    give 0
+  }
+  give string_eq(csv_at(ct_row(table, 0), 0), "section")
+}
+
+// A two-part answer: a status field and a value, packed the way csv.sa packs a
+// row, so the value may be any bytes at all -- including the error marker.
+make ini_pair(status: num, value: str) -> str {
+  hold out = ""
+  hold out = csv_push(out, csv_istr(status))
+  hold out = csv_push(out, value)
+  give out
+}
+
+make ini_pair_ok(p: str) -> num {
+  when len(p) == 0 {
+    give 0
+  }
+  when string_eq(csv_at(p, 0), "1") == 1 {
+    give 1
+  }
+  give 0
+}
+
+make ini_pair_value(p: str) -> str {
+  give csv_at(p, 1)
+}
+
+// Bytes [a, b) of s with a trailing CR dropped. The empty string when the range
+// is empty, which is how a blank line stays blank.
+make ini_cut(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold from = a
+  hold to = b
+  when from < 0 {
+    hold from = 0
+  }
+  when to > n {
+    hold to = n
+  }
+  when to > from {
+    when sx_index(s, to - 1) == 13 {
+      hold to = to - 1
+    }
+  }
+  give csv_sub(s, from, to)
+}
+
+// The byte at i, or -1 outside the string.
+make ini_at(s: str, i: num) -> num {
+  when i < 0 {
+    give 0 - 1
+  }
+  when i >= len(s) {
+    give 0 - 1
+  }
+  give sx_index(s, i)
+}
+
+// 1 for the space bytes this module trims: chr(32) and chr(9).
+make ini_is_space(c: num) -> num {
+  when c == 32 {
+    give 1
+  }
+  when c == 9 {
+    give 1
+  }
+  give 0
+}
+
+// s without leading and trailing space bytes and without a trailing CR.
+make ini_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  hold b = n
+  hold go = 1
+  while go == 1 {
+    when a >= b {
+      hold go = 0
+    } otherwise {
+      when ini_is_space(sx_index(s, a)) == 0 {
+        hold go = 0
+      } otherwise {
+        hold a = a + 1
+      }
+    }
+  }
+  hold go2 = 1
+  while go2 == 1 {
+    when b <= a {
+      hold go2 = 0
+    } otherwise {
+      when ini_is_space(sx_index(s, b - 1)) == 0 {
+        hold go2 = 0
+      } otherwise {
+        hold b = b - 1
+      }
+    }
+  }
+  when b > a {
+    when sx_index(s, b - 1) == 13 {
+      hold b = b - 1
+    }
+  }
+  give csv_sub(s, a, b)
+}
+
+// s without its leading space bytes.
+make ini_ltrim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  hold go = 1
+  while go == 1 {
+    when a >= n {
+      hold go = 0
+    } otherwise {
+      when ini_is_space(sx_index(s, a)) == 0 {
+        hold go = 0
+      } otherwise {
+        hold a = a + 1
+      }
+    }
+  }
+  give csv_sub(s, a, n)
+}
+
+// The offset of the first chr(10) at or after pos, or len(s) when there is
+// none. The line starting at pos is then [pos, that offset).
+make ini_eol(s: str, pos: num) -> num {
+  hold n = len(s)
+  hold i = pos
+  hold go = 1
+  while go == 1 {
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      when sx_index(s, i) == 10 {
+        hold go = 0
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  give i
+}
+
+// The offset of the first byte equal to want, or -1.
+make ini_first_byte(s: str, want: num) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    when sx_index(s, i) == want {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+// The value of one member, decoded under rule 5. Refused when a quoted value
+// carries a backslash that starts no known escape, or an inner quote.
+make ini_decode(raw: str) -> str {
+  hold n = len(raw)
+  hold quoted = 0
+  when n >= 2 {
+    when sx_index(raw, 0) == 34 {
+      when sx_index(raw, n - 1) == 34 {
+        hold quoted = 1
+      }
+    }
+  }
+  when quoted == 0 {
+    give ini_pair(1, raw)
+  }
+  hold body = csv_sub(raw, 1, n - 1)
+  hold m = len(body)
+  hold acc = ""
+  hold i = 0
+  hold bad = 0
+  hold go = 1
+  while go == 1 {
+    when i >= m {
+      hold go = 0
+    } otherwise {
+      hold c = sx_index(body, i)
+      when c == 34 {
+        hold bad = 1
+      } otherwise {
+        when c != 92 {
+          hold acc = concat(acc, chr(c))
+          hold i = i + 1
+        } otherwise {
+          hold moved = 0
+          when i + 1 < m {
+            hold e = sx_index(body, i + 1)
+            when e == 92 {
+              hold acc = concat(acc, chr(92))
+              hold moved = 1
+            }
+            when moved == 0 {
+              when e == 34 {
+                hold acc = concat(acc, chr(34))
+                hold moved = 1
+              }
+            }
+            when moved == 0 {
+              when e == 110 {
+                hold acc = concat(acc, chr(10))
+                hold moved = 1
+              }
+            }
+            when moved == 0 {
+              when e == 114 {
+                hold acc = concat(acc, chr(13))
+                hold moved = 1
+              }
+            }
+            when moved == 0 {
+              when e == 116 {
+                hold acc = concat(acc, chr(9))
+                hold moved = 1
+              }
+            }
+          }
+          when moved == 0 {
+            hold bad = 1
+          } otherwise {
+            hold i = i + 2
+          }
+        }
+      }
+      when bad == 1 {
+        hold go = 0
+      }
+    }
+  }
+  when bad == 1 {
+    give ini_pair(0, "")
+  }
+  give ini_pair(1, acc)
+}
+
+// 1 when s may be a key: not empty, and carrying none of the bytes that would
+// move a line boundary or a split point once the file is written back out. A
+// bracket is refused for the same reason -- ini_write puts a key at the start of
+// a line, and a line that starts with chr(91) is read back as a section header.
+make ini_key_ok(s: str) -> num {
+  when len(s) == 0 {
+    give 0
+  }
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 61 {
+      give 0
+    }
+    when c == 10 {
+      give 0
+    }
+    when c == 13 {
+      give 0
+    }
+    when c == 91 {
+      give 0
+    }
+    when c == 93 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// 1 when s may be a section name: none of the bytes a header line could not
+// carry. A name holding a bracket would be read back as a different header line.
+// The empty name is legal and means the default section -- ini_write spells it
+// by omitting the header line and the table stores it as an empty field -- while
+// a header line that carries an empty name is refused by ini_header.
+make ini_section_ok(s: str) -> num {
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 61 {
+      give 0
+    }
+    when c == 10 {
+      give 0
+    }
+    when c == 13 {
+      give 0
+    }
+    when c == 91 {
+      give 0
+    }
+    when c == 93 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
+// A header line's name, from a line that starts with chr(91). Refused when the
+// bracket is never closed, when anything but spaces follows it, or when the name
+// itself could not be written back out.
+make ini_header(line: str) -> str {
+  hold n = len(line)
+  hold close = 0
+  hold i = 0
+  hold go = 1
+  while go == 1 {
+    when i >= n {
+      hold go = 0
+    } otherwise {
+      when sx_index(line, i) == 93 {
+        hold close = i
+        hold go = 0
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  when close < 1 {
+    give ini_pair(0, "")
+  }
+  hold rest = ini_trim(csv_sub(line, close + 1, n))
+  when len(rest) > 0 {
+    give ini_pair(0, "")
+  }
+  hold name = ini_trim(csv_sub(line, 1, close))
+  when len(name) == 0 {
+    give ini_pair(0, "")
+  }
+  when ini_section_ok(name) == 0 {
+    give ini_pair(0, "")
+  }
+  give ini_pair(1, name)
+}
+
+// 1 when ini_write must quote this value, because the raw bytes would not be
+// read back as themselves: a leading or trailing space byte would be trimmed, a
+// quote or a backslash would be read as quoting or escaping, and a line
+// terminator would end the line. An empty value is quoted for legibility, and
+// it survives the round trip either way.
+make ini_needs_quote(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 1
+  }
+  when ini_is_space(sx_index(s, 0)) == 1 {
+    give 1
+  }
+  when ini_is_space(sx_index(s, n - 1)) == 1 {
+    give 1
+  }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      give 1
+    }
+    when c == 92 {
+      give 1
+    }
+    when c == 10 {
+      give 1
+    }
+    when c == 13 {
+      give 1
+    }
+    hold i = i + 1
+  }
+  give 0
+}
+
+// The written form of one value: quoted only when ini_needs_quote says so, with
+// the four escape pairs of rule 5 built from chr so this file carries no escape
+// sequence of its own to get wrong.
+make ini_quote(s: str) -> str {
+  when ini_needs_quote(s) == 0 {
+    give s
+  }
+  hold q = chr(34)
+  hold b = chr(92)
+  hold out = q
+  hold n = len(s)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c == 92 {
+      hold out = concat(out, concat(b, b))
+    } otherwise {
+      when c == 34 {
+        hold out = concat(out, concat(b, q))
+      } otherwise {
+        when c == 10 {
+          hold out = concat(out, concat(b, chr(110)))
+        } otherwise {
+          when c == 13 {
+            hold out = concat(out, concat(b, chr(114)))
+          } otherwise {
+            when c == 9 {
+              hold out = concat(out, concat(b, chr(116)))
+            } otherwise {
+              hold out = concat(out, chr(c))
+            }
+          }
+        }
+      }
+    }
+    hold i = i + 1
+  }
+  give concat(out, q)
+}
+
+// Put one packed row in front of member row `at` (rows are numbered from 0, and
+// member rows start after the header): rows [0, at) keep their place, the new row
+// follows them, rows [at, count) shift one down. Used for a new member of the
+// default section, which ini_write must print before any header line. Returns
+// "!" for a table that is not one, a row it cannot hold, or a size cap crossed.
+make ini_insert_at(table: str, at: num, row: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ct_row_valid(row) == 0 {
+    give "!"
+  }
+  hold total = ct_row_count(table)
+  when total < 1 {
+    give "!"
+  }
+  when ct_index_valid(at) == 0 {
+    give "!"
+  }
+  when at > total - 1 {
+    give "!"
+  }
+  // k walks the destination table rows -- total + 1 of them, one more than the
+  // source -- and rebuilds the table from the rows themselves: ct_row hands back
+  // a row as the table stores it, and csv_push frames it again, so the result is
+  // a table and not a doubled row. The header is re-framed like any other row,
+  // which is what keeps it row 0; the new member takes destination row at + 1,
+  // and the member it displaces is read from source row at.
+  hold out = ""
+  hold k = 0
+  while k <= total {
+    hold src = k
+    when k > at {
+      hold src = k - 1
+    }
+    hold piece = ct_row(table, src)
+    when k == at + 1 {
+      hold piece = row
+    }
+    hold out = csv_push(out, piece)
+    when len(out) > 262144 {
+      give "!"
+    }
+    hold k = k + 1
+  }
+  when csv_count(out) > 1024 {
+    give "!"
+  }
+  give out
+}
+
+// The header row every ini table starts with.
+make ini_header_row() -> str {
+  hold row = ""
+  hold row = csv_push(row, "section")
+  hold row = csv_push(row, "key")
+  hold row = csv_push(row, "value")
+  give row
+}
+
+// A new table: the header row and nothing else.
+make ini_new() -> str {
+  give ct_append("", ini_header_row())
+}
+
+// Number of member rows, header excluded; -1 for something that is no table.
+// A table with no members at all is not empty -- ini_new() is one row, its
+// header -- so ini_empty is the test for "nothing inside".
+make ini_count(table: str) -> num {
+  hold rows = ct_row_count(table)
+  when rows < 1 {
+    give 0 - 1
+  }
+  give rows - 1
+}
+
+// The index of the first member row of a section, or -1. Member rows are
+// numbered from 0, and row 0 of the table is the header. The default section is
+// answered 0 even when it holds no member -- that is where ini_write puts its
+// rows -- but only for a table that carries the header row, which is the row
+// that gives the default section its place; the scan of a named section starts
+// after the header either way.
+make ini_find_section(table: str, section: str) -> num {
+  hold rows = ini_count(table)
+  when ini_is_default(section) == 1 {
+    when ini_has_header(table) == 1 {
+      give 0
+    }
+  }
+  hold i = 0
+  while i < rows {
+    when string_eq(csv_at(ct_row(table, i + 1), 0), section) == 1 {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+// The index of a member row, or -1. Row 0 is not searched: ini_count does not
+// count it, and its three fields are the column names, which no ini_parse row
+// can carry as a key -- an empty key is refused and a header's own labels are
+// never written into a member.
+make ini_find(table: str, section: str, key: str) -> num {
+  hold rows = ini_count(table)
+  hold i = 0
+  while i < rows {
+    hold row = ct_row(table, i + 1)
+    when string_eq(csv_at(row, 0), section) == 1 {
+      when string_eq(csv_at(row, 1), key) == 1 {
+        give i
+      }
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+// 1 when the member is there, 0 when it is not, -1 for a table that is not one.
+make ini_has(table: str, section: str, key: str) -> num {
+  when ct_valid(table) == 0 {
+    give 0 - 1
+  }
+  hold at = ini_find(table, section, key)
+  when at < 0 {
+    give 0
+  }
+  give 1
+}
+
+// A member value, or the empty string when it is absent.
+make ini_value(table: str, section: str, key: str) -> str {
+  when ct_valid(table) == 0 {
+    give ""
+  }
+  hold at = ini_find(table, section, key)
+  when at < 0 {
+    give ""
+  }
+  give csv_at(ct_row(table, at + 1), 2)
+}
+
+// Parse configuration text into a packed table. The error marker is chr(33).
+make ini_parse(text: str) -> str {
+  when len(text) > ini_max_bytes() {
+    give "!"
+  }
+  hold table = ini_new()
+  hold section = ini_default_section()
+  hold n = len(text)
+  hold pos = 0
+  hold bad = 0
+  hold skip = 1
+  hold go = 1
+  while go == 1 {
+    hold stop = ini_eol(text, pos)
+    hold line = ini_cut(text, pos, stop)
+    hold pos = stop + 1
+    hold body = ini_ltrim(line)
+    hold c = ini_at(body, 0)
+    when len(body) == 0 {
+      hold skip = 1
+    } otherwise {
+      when c == 59 {
+        hold skip = 1
+      } otherwise {
+        when c == 35 {
+          hold skip = 1
+        } otherwise {
+          hold skip = 0
+        }
+      }
+    }
+    when skip == 0 {
+      when c == 91 {
+        hold head = ini_header(body)
+        when ini_pair_ok(head) == 0 {
+          hold bad = 1
+        } otherwise {
+          hold name = ini_pair_value(head)
+          when ini_find_section(table, name) >= 0 {
+            hold bad = 1
+          } otherwise {
+            hold section = name
+          }
+        }
+      } otherwise {
+        hold eq = ini_first_byte(body, 61)
+        when eq < 0 {
+          hold bad = 1
+        } otherwise {
+          hold key = ini_trim(csv_sub(body, 0, eq))
+          hold raw = ini_trim(csv_sub(body, eq + 1, len(body)))
+          when ini_key_ok(key) == 0 {
+            hold bad = 1
+          } otherwise {
+            hold got = ini_decode(raw)
+            when ini_pair_ok(got) == 0 {
+              hold bad = 1
+            } otherwise {
+              hold value = ini_pair_value(got)
+              when ini_has(table, section, key) == 1 {
+                hold bad = 1
+              } otherwise {
+                hold row = ""
+                hold row = csv_push(row, section)
+                hold row = csv_push(row, key)
+                hold row = csv_push(row, value)
+                hold table = ct_append(table, row)
+                when string_eq(table, "!") == 1 {
+                  hold bad = 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    when pos > n {
+      hold go = 0
+    }
+    when bad == 1 {
+      hold go = 0
+    }
+  }
+  when bad == 1 {
+    give "!"
+  }
+  give table
+}
+
+// 1 when the text parses, 0 when it does not.
+make ini_valid(text: str) -> num {
+  hold t = ini_parse(text)
+  when len(t) == 0 {
+    give 0
+  }
+  when sx_index(t, 0) == 33 {
+    give 0
+  }
+  give 1
+}
+
+// Parse and look up in one step, for a caller that reads the file once.
+make ini_get_text(text: str, section: str, key: str) -> str {
+  give ini_value(ini_parse(text), section, key)
+}
+
+// How many distinct sections the table holds, in order of first appearance with
+// the default section always first: for an ini table it counts once whether or
+// not a member names it, because ini_write gives it the head of the file.
+make ini_section_count(table: str) -> num {
+  hold rows = ini_count(table)
+  hold i = 0
+  hold count = ini_has_header(table)
+  while i < rows {
+    hold sec = csv_at(ct_row(table, i + 1), 0)
+    when ini_is_default(sec) == 1 {
+      hold i = i + 1
+    } otherwise {
+      when ini_find_section(table, sec) == i {
+        hold count = count + 1
+      }
+      hold i = i + 1
+    }
+  }
+  give count
+}
+
+// The i-th section name in that order; 0 is the default section, whose name is
+// the empty string, and the answer past the end is the empty string too.
+make ini_section_at(table: str, i: num) -> str {
+  hold rows = ini_count(table)
+  when i == 0 {
+    when ini_has_header(table) == 1 {
+      give ""
+    }
+  }
+  hold k = 0
+  hold seen = ini_has_header(table)
+  while k < rows {
+    hold sec = csv_at(ct_row(table, k + 1), 0)
+    when ini_is_default(sec) == 1 {
+      hold k = k + 1
+    } otherwise {
+      when ini_find_section(table, sec) == k {
+        when seen == i {
+          give sec
+        }
+        hold seen = seen + 1
+      }
+      hold k = k + 1
+    }
+  }
+  give ""
+}
+
+// How many members a section holds.
+make ini_key_count(table: str, section: str) -> num {
+  hold rows = ini_count(table)
+  hold i = 0
+  hold count = 0
+  while i < rows {
+    when string_eq(csv_at(ct_row(table, i + 1), 0), section) == 1 {
+      hold count = count + 1
+    }
+    hold i = i + 1
+  }
+  give count
+}
+
+// The i-th key of a section, in document order, or the empty string past the
+// end. ini_parse never stores an empty key, so "" only ever means absent.
+make ini_key_at(table: str, section: str, i: num) -> str {
+  hold rows = ini_count(table)
+  hold k = 0
+  hold seen = 0
+  while k < rows {
+    hold row = ct_row(table, k + 1)
+    when string_eq(csv_at(row, 0), section) == 1 {
+      when seen == i {
+        give csv_at(row, 1)
+      }
+      hold seen = seen + 1
+    }
+    hold k = k + 1
+  }
+  give ""
+}
+
+// Set one member. An existing row keeps its place; a new one goes to the end of
+// the table, except in the default section, where it goes to the head -- that is
+// where ini_write prints those members, ahead of the first header line, and a
+// writer that appended them would move them behind every section in the file.
+// Functional: the input table is never modified. The error marker comes back for
+// a table that is not one, an empty or unsplittable key, or a section name a
+// header line could not carry.
+make ini_set(table: str, section: str, key: str, value: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  when ini_section_ok(section) == 0 {
+    give "!"
+  }
+  when ini_key_ok(key) == 0 {
+    give "!"
+  }
+  hold at = ini_find(table, section, key)
+  when at >= 0 {
+    give ct_set(table, at + 1, 2, value)
+  }
+  hold row = ""
+  hold row = csv_push(row, section)
+  hold row = csv_push(row, key)
+  hold row = csv_push(row, value)
+  when ini_is_default(section) == 1 {
+    give ini_insert_at(table, 0, row)
+  }
+  give ct_append(table, row)
+}
+
+// Drop every row of one section and key, keeping the rest in order. Dropping a
+// member the table does not hold leaves it intact; the header always survives.
+make ini_unset(table: str, section: str, key: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  hold out = ini_new()
+  hold rows = ini_count(table)
+  hold i = 0
+  while i < rows {
+    hold row = ct_row(table, i + 1)
+    hold keep = 1
+    when string_eq(csv_at(row, 0), section) == 1 {
+      when string_eq(csv_at(row, 1), key) == 1 {
+        hold keep = 0
+      }
+    }
+    when keep == 1 {
+      hold out = ct_append(out, row)
+      when string_eq(out, "!") == 1 {
+        give "!"
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// Drop every row of one section.
+make ini_drop_section(table: str, section: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  hold out = ini_new()
+  hold rows = ini_count(table)
+  hold i = 0
+  while i < rows {
+    hold row = ct_row(table, i + 1)
+    when string_eq(csv_at(row, 0), section) == 0 {
+      hold out = ct_append(out, row)
+      when string_eq(out, "!") == 1 {
+        give "!"
+      }
+    }
+    hold i = i + 1
+  }
+  give out
+}
+
+// 1 when the table holds nothing but its header row, 0 when it holds members,
+// and 0 for something that is no table at all.
+make ini_empty(table: str) -> num {
+  when ini_count(table) == 0 {
+    give 1
+  }
+  give 0
+}
+
+// Canonical configuration text: sections in the order rule 8 enumerates them,
+// each member as key space equals space value, a header line before each section
+// and no blank line inside one. Members of the default section come first and
+// carry no header line of their own. A comment line read from a file is not kept
+// -- the table has nowhere to put it -- so ini_write is a canonicalisation of
+// what was parsed, not a formatting-preserving edit of the text.
+make ini_write(table: str) -> str {
+  when ct_valid(table) == 0 {
+    give "!"
+  }
+  hold out = ""
+  hold secs = ini_section_count(table)
+  hold s = 0
+  while s < secs {
+    hold sec = ini_section_at(table, s)
+    when len(sec) > 0 {
+      hold open = concat(chr(91), sec)
+      hold open = concat(open, chr(93))
+      hold out = concat(out, concat(open, chr(10)))
+    }
+    hold ks = ini_key_count(table, sec)
+    hold k = 0
+    while k < ks {
+      hold key = ini_key_at(table, sec, k)
+      hold val = ini_value(table, sec, key)
+      hold out = concat(out, key)
+      hold out = concat(out, " = ")
+      hold out = concat(out, ini_quote(val))
+      hold out = concat(out, chr(10))
+      hold k = k + 1
+    }
+    hold s = s + 1
+  }
+  give out
+}
+
+// 1 when parsing, writing and parsing again keeps every row of the table, which
+// is what makes ini_write safe to save over a file. A reader and a writer that
+// disagree fail here rather than in a caller.
+make ini_round_trips(text: str) -> num {
+  hold t = ini_parse(text)
+  when string_eq(t, "!") == 1 {
+    give 0
+  }
+  hold back = ini_parse(ini_write(t))
+  when string_eq(back, t) == 1 {
+    give 1
+  }
+  give 0
+}

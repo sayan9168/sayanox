@@ -1,0 +1,83 @@
+// A configuration file: read it, answer a few questions, change one setting,
+// and write it back. ini_parse refuses malformed text instead of guessing, so a
+// typo is a refusal here rather than a silently empty option, and ini_round_trips
+// says whether ini_write's output comes back through ini_parse unchanged -- which
+// is what makes it safe to save over the file you read.
+//
+// Build: ./selfhost/gen2 examples/ini_config.sa /tmp/inicfg.c
+//        cc -std=gnu11 -O2 -o /tmp/inicfg /tmp/inicfg.c -lm && /tmp/inicfg
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+use "stdlib/ini.sa"
+
+// A quoted value carries the bytes an unquoted one cannot: a leading space, a
+// comment marker, an equals sign. There are no inline comments, so the semicolon
+// inside `note` is data, not a comment. The members before the first header belong
+// to the default section, named "".
+hold q = chr(34)
+hold cfg = "; sayanox package file"
+hold cfg = concat(cfg, "\nname = my-pkg\nversion = 0.1.0\nnote = keep; this\n")
+hold cfg = concat(cfg, "\n[deps]\nmath = 0.1.0\ntext = 0.2.0\n")
+hold cfg = concat(cfg, "\n[tool.lint]\nselect = \"E, W\"\nexclude =\n")
+hold cfg = concat(cfg, "path = \"/tmp/my dir\"\n")
+
+show ini_valid(cfg)
+show ini_count(ini_parse(cfg))
+show ini_section_count(ini_parse(cfg))
+show ini_value(ini_parse(cfg), "deps", "math")
+show ini_value(ini_parse(cfg), ini_default_section(), "note")
+show ini_value(ini_parse(cfg), "tool.lint", "select")
+show ini_value(ini_parse(cfg), "tool.lint", "exclude")
+show ini_key_count(ini_parse(cfg), "deps")
+show ini_key_at(ini_parse(cfg), "deps", 1)
+show ini_section_at(ini_parse(cfg), 1)
+
+// A missing option is the empty string, and the empty string is also a legal
+// value, so `has` is the question that distinguishes them.
+show len(ini_value(ini_parse(cfg), "deps", "absent"))
+show ini_has(ini_parse(cfg), "deps", "absent")
+show ini_has(ini_parse(cfg), "tool.lint", "exclude")
+
+// ini_get_text parses and looks up in one call, for a reader that asks once.
+show ini_get_text(cfg, "package", "name")
+show ini_get_text(cfg, "nope", "name")
+
+// Writing: ini_set replaces a member in place and appends a new one at the end,
+// and the input table is never touched -- every call returns a new table.
+hold t = ini_parse(cfg)
+hold t2 = ini_set(t, "tool.lint", "exclude", "tests")
+show ini_has(t, "tool.lint", "exclude")
+show ini_count(t2)
+hold t3 = ini_set(t2, ini_default_section(), "license", "MIT")
+show ini_count(t3)
+show ini_write(t3)
+
+// The written text is canonical: sections in order of first appearance, `key = value`
+// with one space each side, and quoting only where the bytes need it. Round trip
+// says the odd values (the leading space in the path, the empty exclude) survived.
+show ini_round_trips(ini_write(t3))
+show ini_valid(ini_write(t3))
+
+// Two refusals worth knowing: a repeated key in one section, and a document whose
+// only flaw is that a quoted value carries an escape the rule does not define.
+hold bad1 = "[a]\nk = 1\nk = 2\n"
+hold bad2 = concat(concat("[a]\nk = ", q), concat("a\\qb", concat(q, "\n")))
+show ini_valid(bad1)
+show len(ini_parse(bad1))
+show ini_valid(bad2)
+show ini_valid(concat("[a]\nk = ", concat("a\\rb", concat(q, "\n"))))
+
+// A table is also a csv_table, so the CSV query layer works on a config file:
+// every member of one section, as rows, without ini knowing about it.
+hold rows = ct_filter_eq(t3, 0, "deps", 0)
+show ini_count(rows)
+show ct_cell(rows, 0, 1)
+show ct_cell(rows, 1, 2)
+
+// Save and read back, the whole loop a program actually runs.
+hold wrote = write_file("/tmp/sayanox-ini-example.ini", ini_write(t3))
+hold again = read_file("/tmp/sayanox-ini-example.ini")
+show ini_valid(again)
+show ini_count(ini_parse(again))
+show ini_value(ini_parse(again), "tool.lint", "exclude")
+show string_eq(again, ini_write(t3))

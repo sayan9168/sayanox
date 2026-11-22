@@ -3,6 +3,7 @@ use "tools/sxport_lib.sa"
 
 make ep_known(name: str) -> num {
   when string_eq(name, "test-stdlib-next") == 1 || string_eq(name, "test-stdlib-csv") == 1 || string_eq(name, "test-stdlib-extended") == 1 || string_eq(name, "test-ir-exec") == 1 { give 1 }
+  when string_eq(name, "test-stdlib-ini") == 1 { give 1 }
   when string_eq(name, "test-stdlib-store") == 1 { give 1 }
   give 0
 }
@@ -95,6 +96,49 @@ make ep_sniff_create() -> num {
       }
       jp_kind = jp_kind + 1
     }
+  give 0
+}
+
+// stdlib/ini.sa: an INI / TOML-lite configuration reader and writer built on
+// top of the csv_table layer. The expected bytes come from a Python model of
+// the rule text in that module's header comment -- Sayanox was never consulted
+// for an expectation -- and the accepted documents were also re-parsed with
+// Python's configparser, so a parser that agrees only with itself cannot pass.
+// Every one of the four C backends must print exactly those bytes, and print
+// them identically. The oracle is two fixtures: the parse/lookup surface with
+// the byte caps, and the writer's own mutations. Bounded native_aot counts one
+// patch slot per call site and one slot per top-level name, and the single-file
+// oracle passed neither limit; the pair is the same checks, cut at a block
+// boundary, which is how the library-pack oracles are grouped for the same
+// reason.
+make ep_ini() -> num {
+  hold dir = "selfhost/seed_tests/stdlib_next"
+  hold created = gl_ensure_dir(dir)
+  hold half = 0
+  while half < 2 {
+    hold stem = "selfhost/stdlib_ini"
+    hold label = "INI configuration independent oracle"
+    when half == 1 {
+      stem = "selfhost/stdlib_ini_write"
+      label = "INI writer mutation independent oracle"
+    }
+    hold src = concat(stem, "_test.sa")
+    hold oracle = concat(stem, ".want")
+    hold present = bt_require_file(oracle)
+    hold base = concat(concat(dir, "/ini_"), gl_istr(half))
+    hold kind = 0
+    while kind < 4 {
+      hold bin = concat(base, concat("_", gl_istr(kind)))
+      hold c = ep_compile(kind, src, bin)
+      hold r = pg_capture(sh_quote(bin), concat(bin, ".out"))
+      hold a = gl_assert_files_eq(concat(bin, ".out"), oracle, label)
+      when kind > 0 {
+        hold p = gl_assert_files_eq(concat(base, "_0.out"), concat(bin, ".out"), concat(label, " backend parity"))
+      }
+      kind = kind + 1
+    }
+    half = half + 1
+  }
   give 0
 }
 
@@ -526,6 +570,7 @@ make ep_next() -> num {
   }
 
   hold snjp = ep_sniff_create()
+  hold inig = ep_ini()
 
   // Filesystem/process helpers need the fuller runtime. The bounded native_aot
   // and seed-min profiles are intentionally excluded; gen2 and the full native
@@ -641,6 +686,7 @@ make ep_ir() -> num {
 make ep_run(name: str, built: list) -> num {
   hold baseline = rt_baseline(built)
   when string_eq(name, "test-stdlib-next") == 1 { give ep_next() }
+  when string_eq(name, "test-stdlib-ini") == 1 { give ep_ini() }
   when string_eq(name, "test-stdlib-csv") == 1 { give ep_csv() }
   when string_eq(name, "test-stdlib-store") == 1 { give ep_store() }
   hold ir = target_native_tool("sxirexec")
