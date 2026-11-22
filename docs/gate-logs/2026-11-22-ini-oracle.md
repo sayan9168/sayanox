@@ -89,12 +89,12 @@ with Python's `configparser` (`RawConfigParser`, `strict=True`, `delimiters=("="
   checker's row context — the fixture re-pins the *input* table right after the
   step that modified a copy of it, to prove the input was not touched. Recorded so
   the next reader does not chase a module bug that is not there.
-* The `;`/`#` question the 2026-11-21 notes left open (does `ini_needs_quote` need
-  a clause for a value that begins with a comment marker?) resolves to *no*: a
-  written member line starts with the key, so a marker at the start of a value can
-  never be read as the start of a comment, and quoting it would change the stored
-  bytes' spelling for no gain. Four new documents pin marker-first values, a lone
-  `;` value, a trailing marker and a quoted `";x"`, each with its round trip.
+* Rule 9's wording leaves one question open — must `ini_needs_quote` grow a
+  clause for a value that begins with a comment marker? — and it resolves to
+  *no*: a written member line starts with the key, so a marker at the start of a
+  value can never be read as the start of a comment, and quoting it would change
+  the stored bytes' spelling for no gain. Four documents pin marker-first values,
+  a lone `;` value, a trailing marker and a quoted `";x"`, each with its round trip.
 
 ## Acceptance
 
