@@ -4308,6 +4308,44 @@ while exmore == 1 {
   }
 }
 
+hold advprivate = "_sx_adv"
+while sxecontains(source, advprivate) == 1 {
+  hold advprivate = concat(advprivate, "x")
+}
+hold advfail = concat(advprivate, "_fail")
+hold advstate = []
+hold source = sxadvance_lower(source, advprivate, advstate)
+hold n = len(source)
+hold advactive = 0
+hold advbad = 0
+hold advi = 0
+while advi < len(advstate) {
+  hold advev = advstate[advi]
+  when advev == 1 {
+    hold advactive = 1
+  } otherwise {
+    when advbad == 0 {
+      hold advbad = advev
+    }
+  }
+  hold advi = advi + 1
+}
+when advbad == 2 {
+  hold exerr = concat(exerr, "#error sayanox-min: placeholder '_' is only valid inside a '|>' pipeline call\n")
+}
+when advbad == 3 {
+  hold exerr = concat(exerr, "#error sayanox-min: malformed '|>' pipeline expression\n")
+}
+when advbad == 4 {
+  hold exerr = concat(exerr, "#error sayanox-min: rewind is only valid inside a trial block\n")
+}
+when advbad == 5 {
+  hold exerr = concat(exerr, "#error sayanox-min: trial cannot snapshot outer list or struct mutation\n")
+}
+when advbad >= 6 {
+  hold exerr = concat(exerr, "#error sayanox-min: malformed trial/converge/invariant syntax\n")
+}
+
 when seed_profile == 1 { hold source = sxseed_normalize(source)
   hold n = len(source) }
 
@@ -4461,6 +4499,12 @@ when interpactive == 1 {
   hold fsret = concat(fsret, "=s|")
   hold fspk = concat(fspk, interpprivate)
   hold fspk = concat(fspk, "=v|")
+}
+when advactive == 1 {
+  hold fsret = concat(fsret, advfail)
+  hold fsret = concat(fsret, "=n|")
+  hold fspk = concat(fspk, advfail)
+  hold fspk = concat(fspk, "=s|")
 }
 hold seed_function_total = 0
 hold seed_params = ""
@@ -20569,6 +20613,11 @@ when inready == 1 {
   hold out = concat(out, "static sx_list *")
   hold out = concat(out, inprivate)
   hold out = concat(out, "list(sx_list *value){return value;}\n")
+}
+when advactive == 1 {
+  hold out = concat(out, "static double ")
+  hold out = concat(out, advfail)
+  hold out = concat(out, "(const char *m){ fflush(stdout); fputs(m,stderr); exit(1); return 0.0; }\n")
 }
 // ---------------- struct typedefs (field types come from literals) ----------------
 hold tdi = 0

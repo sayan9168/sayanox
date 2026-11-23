@@ -409,6 +409,69 @@ make skip_stmt(s: str, n: num, from: num) -> num {
   when blk == 0 && mkw(s, n, r, "elif") == 1 {
     blk = 1
   }
+  when blk == 0 && mkw(s, n, r, "trial") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "converge") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw(s, n, r, "invariant") == 1 {
+    hold iv = r[0]
+    hold iv_nest = 0
+    hold iv_go = 1
+    while iv < n && iv_go == 1 {
+      hold ic = sx_index(s, iv)
+      when ic == 34 {
+        iv = iv + 1
+        while iv < n && sx_index(s, iv) != 34 {
+          when sx_index(s, iv) == 92 && iv + 1 < n {
+            iv = iv + 1
+          }
+          iv = iv + 1
+        }
+        when iv < n {
+          iv = iv + 1
+        }
+      } otherwise {
+        when ic == 47 && iv + 1 < n && sx_index(s, iv + 1) == 47 {
+          iv_go = 0
+        } otherwise {
+          when iv_nest == 0 && (ic == 10 || ic == 13 || ic == 125 || ic == 123) {
+            iv_go = 0
+          } otherwise {
+            when ic == 40 || ic == 91 {
+              iv_nest = iv_nest + 1
+            }
+            when ic == 41 || ic == 93 {
+              when iv_nest > 0 {
+                iv_nest = iv_nest - 1
+              }
+            }
+            when iv_nest == 0 && id0c(ic) == 1 {
+              hold prev_ok = 1
+              when iv > r[0] && idcc(sx_index(s, iv - 1)) == 1 {
+                prev_ok = 0
+              }
+              when prev_ok == 1 {
+                hold we = iv
+                while we < n && idcc(sx_index(s, we)) == 1 {
+                  we = we + 1
+                }
+                hold iw = sub(s, iv, we)
+                when string_eq(iw, "otherwise") == 1 || string_eq(iw, "else") == 1 {
+                  give iv
+                }
+                iv = we - 1
+              }
+            }
+            iv = iv + 1
+          }
+        }
+      }
+    }
+    hold e_iv = eol(s, n, p)
+    give p[0]
+  }
   when blk == 0 {
     hold e2 = eol(s, n, p)
     give p[0]

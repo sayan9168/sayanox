@@ -148,14 +148,53 @@ make rf_block(src: str, sn: num, p_box: list, level: num) -> num {
         proven = 1
       }
     } otherwise {
-      when string_eq(word, "while") == 1 || string_eq(word, "for") == 1 {
-        hold sk3 = rf_skip(src, sn, p_box, 1)
-        hold wb = rf_block(src, sn, p_box, level + 1)
-      } otherwise {
-        when string_eq(word, "give") == 1 {
-          proven = 1
+      when string_eq(word, "trial") == 1 {
+        hold sk_tr = rf_skip(src, sn, p_box, 1)
+        hold tb = rf_block(src, sn, p_box, level + 1)
+        hold qt_pos = p_box[0]
+        hold qt_box = [qt_pos]
+        hold zts = rf_space(src, sn, qt_box)
+        hold t_tail = rf_word(src, sn, qt_box)
+        when string_eq(t_tail, "otherwise") == 1 || string_eq(t_tail, "else") == 1 {
+          p_box[0] = qt_box[0]
+          hold sk_tro = rf_skip(src, sn, p_box, 1)
+          hold ob = rf_block(src, sn, p_box, level + 1)
+          when tb == 1 && ob == 1 {
+            proven = 1
+          }
         }
-        hold sk4 = rf_skip(src, sn, p_box, 0)
+      } otherwise {
+        when string_eq(word, "while") == 1 || string_eq(word, "for") == 1 || string_eq(word, "converge") == 1 {
+          hold sk3 = rf_skip(src, sn, p_box, 1)
+          hold wb = rf_block(src, sn, p_box, level + 1)
+          when string_eq(word, "converge") == 1 {
+            hold qc_pos = p_box[0]
+            hold qc_box = [qc_pos]
+            hold zcs = rf_space(src, sn, qc_box)
+            hold c_tail = rf_word(src, sn, qc_box)
+            when string_eq(c_tail, "otherwise") == 1 || string_eq(c_tail, "else") == 1 {
+              p_box[0] = qc_box[0]
+              hold sk_co = rf_skip(src, sn, p_box, 1)
+              hold cob = rf_block(src, sn, p_box, level + 1)
+            }
+          }
+        } otherwise {
+          when string_eq(word, "give") == 1 {
+            proven = 1
+          }
+          hold sk4 = rf_skip(src, sn, p_box, 0)
+          when string_eq(word, "invariant") == 1 {
+            hold qi_pos = p_box[0]
+            hold qi_box = [qi_pos]
+            hold zis = rf_space(src, sn, qi_box)
+            hold i_tail = rf_word(src, sn, qi_box)
+            when string_eq(i_tail, "otherwise") == 1 || string_eq(i_tail, "else") == 1 {
+              p_box[0] = qi_box[0]
+              hold sk_io = rf_skip(src, sn, p_box, 1)
+              hold iob = rf_block(src, sn, p_box, level + 1)
+            }
+          }
+        }
       }
     }
   }
@@ -649,7 +688,7 @@ make endstmt_st(src: str, st: list) -> num {
     give 0
   }
   hold saved = st[0]
-  when mkw_st(src, st, "hold") == 1 || mkw_st(src, st, "show") == 1 || mkw_st(src, st, "when") == 1 || mkw_st(src, st, "while") == 1 || mkw_st(src, st, "make") == 1 || mkw_st(src, st, "give") == 1 || mkw_st(src, st, "struct") == 1 || mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 || mkw_st(src, st, "for") == 1 || mkw_st(src, st, "break") == 1 || mkw_st(src, st, "continue") == 1 || mkw_st(src, st, "elif") == 1 {
+  when mkw_st(src, st, "hold") == 1 || mkw_st(src, st, "show") == 1 || mkw_st(src, st, "when") == 1 || mkw_st(src, st, "while") == 1 || mkw_st(src, st, "make") == 1 || mkw_st(src, st, "give") == 1 || mkw_st(src, st, "struct") == 1 || mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 || mkw_st(src, st, "for") == 1 || mkw_st(src, st, "break") == 1 || mkw_st(src, st, "continue") == 1 || mkw_st(src, st, "elif") == 1 || mkw_st(src, st, "trial") == 1 || mkw_st(src, st, "rewind") == 1 || mkw_st(src, st, "converge") == 1 || mkw_st(src, st, "invariant") == 1 {
     st[0] = saved
     give 0
   }

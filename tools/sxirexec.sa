@@ -896,6 +896,21 @@ make lookup_off_ip(map_offs: list, map_ips: list, target_off: num) -> num {
   give 0 - 1
 }
 
+make lookup_off_ge_idx(map_offs: list, target_off: num) -> num {
+  hold n = len(map_offs)
+  hold best = 0 - 1
+  hold i = 0
+  while i < n {
+    when map_offs[i] >= target_off {
+      when best < 0 || map_offs[i] < map_offs[best] {
+        best = i
+      }
+    }
+    i = i + 1
+  }
+  give best
+}
+
 make lookup_patch_to(patch_bs: list, npc: num, call_at: num) -> num {
   hold i = 0
   while i < npc {
@@ -972,6 +987,24 @@ make jcc_code_ir(mn: str) -> num {
   }
   when string_eq(mn, "JNE") == 1 {
     give 5
+  }
+  when string_eq(mn, "JP") == 1 {
+    give 6
+  }
+  when string_eq(mn, "JNP") == 1 {
+    give 7
+  }
+  when string_eq(mn, "JL") == 1 {
+    give 8
+  }
+  when string_eq(mn, "JGE") == 1 {
+    give 9
+  }
+  when string_eq(mn, "JLE") == 1 {
+    give 10
+  }
+  when string_eq(mn, "JG") == 1 {
+    give 11
   }
   give 0 - 1
 }
@@ -1155,32 +1188,98 @@ make dbg_num(tok: str) -> num {
 
 // Breakpoints live in a preallocated table plus a one-word count, so the
 // command loop only ever writes list elements: no outer binding is reassigned
-// from inside a nested block.
-make dbg_has(bps: list, count: num, v: num) -> num {
+// from inside a nested block. `bp_meta` stores 4 words per slot:
+//   [reg_id (-1 = unconditional), op_code (1..6), cmp_val, is_raw_int]
+make dbg_reg_val(r: num, regs_hi: list, regs_lo: list, is_raw: num) -> num {
+  hold hi = regs_hi[r]
+  hold lo = regs_lo[r]
+  when r >= 16 {
+    give hl_to_f64(hi, lo)
+  }
+  when is_raw == 1 {
+    give i64_to_signed_num(hi, lo)
+  }
+  when hi == 0 {
+    give lo
+  }
+  when hi == 4294967295 {
+    give i64_to_signed_num(hi, lo)
+  }
+  give hl_to_f64(hi, lo)
+}
+
+make dbg_cond_eval(bp_meta: list, idx: num, regs_hi: list, regs_lo: list) -> num {
+  hold mb = idx * 4
+  hold reg_i = bp_meta[mb]
+  when reg_i < 0 {
+    give 1
+  }
+  hold cop = bp_meta[mb + 1]
+  hold rhs = bp_meta[mb + 2]
+  hold is_raw = bp_meta[mb + 3]
+  hold lhs = dbg_reg_val(reg_i, regs_hi, regs_lo, is_raw)
+  when cop == 1 && lhs == rhs { give 1 }
+  when cop == 2 && lhs != rhs { give 1 }
+  when cop == 3 && lhs < rhs { give 1 }
+  when cop == 4 && lhs <= rhs { give 1 }
+  when cop == 5 && lhs > rhs { give 1 }
+  when cop == 6 && lhs >= rhs { give 1 }
+  give 0
+}
+
+make dbg_bp_hit(bps: list, bp_meta: list, count: num, v: num, regs_hi: list, regs_lo: list) -> num {
   hold i = 0
   while i < count {
-    hold b = bps[i]
-    when b == v {
-      give 1
+    when bps[i] == v {
+      when dbg_cond_eval(bp_meta, i, regs_hi, regs_lo) == 1 {
+        give 1
+      }
     }
     i = i + 1
   }
   give 0
 }
 
-make dbg_bp_add(bps: list, st: list, v: num) -> num {
+make dbg_bp_add_ext(bps: list, bp_meta: list, st: list, v: num, cspec: list) -> num {
   hold n = st[0]
   when n >= len(bps) {
     show "sxdbg: breakpoint table is full"
     give n
   }
   bps[n] = v
+  hold mb = n * 4
+  bp_meta[mb] = cspec[0]
+  bp_meta[mb + 1] = cspec[1]
+  bp_meta[mb + 2] = cspec[2]
+  bp_meta[mb + 3] = cspec[3]
   st[0] = n + 1
   give n + 1
 }
 
+make dbg_cond_fmt(bp_meta: list, idx: num) -> str {
+  hold mb = idx * 4
+  hold rid = bp_meta[mb]
+  when rid < 0 {
+    give ""
+  }
+  hold cop = bp_meta[mb + 1]
+  hold rhs = bp_meta[mb + 2]
+  hold is_raw = bp_meta[mb + 3]
+  hold op_s = "=="
+  when cop == 2 { op_s = "!=" }
+  when cop == 3 { op_s = "<" }
+  when cop == 4 { op_s = "<=" }
+  when cop == 5 { op_s = ">" }
+  when cop == 6 { op_s = ">=" }
+  hold v_s = istr_ir(rhs)
+  when is_raw == 1 && rhs >= 0 {
+    v_s = concat("0x", dbg_hex(rhs))
+  }
+  give concat(dbg_reg_name(rid), concat(" ", concat(op_s, concat(" ", v_s))))
+}
+
 // Drops <v>; gives the new count.
-make dbg_bp_del(bps: list, st: list, v: num) -> num {
+make dbg_bp_del_ext(bps: list, bp_meta: list, st: list, v: num) -> num {
   hold n = st[0]
   hold i = 0
   hold j = 0
@@ -1188,6 +1287,12 @@ make dbg_bp_del(bps: list, st: list, v: num) -> num {
     hold b = bps[i]
     when b != v {
       bps[j] = b
+      hold sb = i * 4
+      hold db = j * 4
+      bp_meta[db] = bp_meta[sb]
+      bp_meta[db + 1] = bp_meta[sb + 1]
+      bp_meta[db + 2] = bp_meta[sb + 2]
+      bp_meta[db + 3] = bp_meta[sb + 3]
       j = j + 1
     }
     i = i + 1
@@ -1201,7 +1306,7 @@ make dbg_bp_clear(st: list) -> num {
   give 0
 }
 
-make dbg_bps(bps: list, n: num) -> num {
+make dbg_bps_ext(bps: list, bp_meta: list, n: num) -> num {
   when n == 0 {
     show "sxdbg: no breakpoints"
     give 0
@@ -1213,10 +1318,180 @@ make dbg_bps(bps: list, n: num) -> num {
       out = concat(out, ", ")
     }
     out = concat(out, istr_ir(bps[i]))
+    hold cf_s = dbg_cond_fmt(bp_meta, i)
+    when len(cf_s) > 0 {
+      out = concat(out, concat(" (if ", concat(cf_s, ")")))
+    }
     i = i + 1
   }
   show concat("sxdbg: breakpoints: ", out)
   give 0
+}
+
+// Parse optional `if <reg> <op> <num>` suffix from a `break ...` argument tail.
+// Returns head before `if`; fills `cspec = [reg, op, val, raw, ok]`.
+make dbg_parse_break_if(raw: str, cspec: list) -> str {
+  cspec[0] = 0 - 1
+  cspec[1] = 0
+  cspec[2] = 0
+  cspec[3] = 0
+  cspec[4] = 1
+  hold n = len(raw)
+  hold if_at = 0 - 1
+  hold i = 0
+  while i + 2 <= n && if_at < 0 {
+    when sx_index(raw, i) == 105 && sx_index(raw, i + 1) == 102 {
+      hold pre_ok = 0
+      when i == 0 || sx_index(raw, i - 1) == 32 || sx_index(raw, i - 1) == 9 {
+        pre_ok = 1
+      }
+      hold post_ok = 0
+      when i + 2 < n && (sx_index(raw, i + 2) == 32 || sx_index(raw, i + 2) == 9) {
+        post_ok = 1
+      }
+      when pre_ok == 1 && post_ok == 1 {
+        if_at = i
+      }
+    }
+    i = i + 1
+  }
+  when if_at < 0 {
+    give trim_ir(raw)
+  }
+  hold head = trim_ir(slice_ir(raw, 0, if_at))
+  hold cond_s = trim_ir(slice_ir(raw, if_at + 2, n))
+  hold rname = dbg_word(cond_s)
+  hold rrest = dbg_rest(cond_s)
+  hold rid = reg_id_ir(rname)
+  when rid < 0 || len(rrest) == 0 {
+    cspec[4] = 0
+    give head
+  }
+  hold op_s = dbg_word(rrest)
+  hold v_s = trim_ir(dbg_rest(rrest))
+  hold opc = 0
+  when string_eq(op_s, "==") == 1 { opc = 1 }
+  when string_eq(op_s, "!=") == 1 { opc = 2 }
+  when string_eq(op_s, "<") == 1 { opc = 3 }
+  when string_eq(op_s, "<=") == 1 { opc = 4 }
+  when string_eq(op_s, ">") == 1 { opc = 5 }
+  when string_eq(op_s, ">=") == 1 { opc = 6 }
+  when opc == 0 || len(v_s) == 0 {
+    cspec[4] = 0
+    give head
+  }
+  hold is_raw = 0
+  hold cval = 0
+  when starts_with_ir(v_s, "0x") == 1 {
+    is_raw = 1
+    cval = dbg_num(v_s)
+    when cval < 0 {
+      cspec[4] = 0
+      give head
+    }
+  } otherwise {
+    hold vneg = 0
+    hold vd = v_s
+    when sx_index(v_s, 0) == 45 {
+      vneg = 1
+      vd = trim_ir(slice_ir(v_s, 1, len(v_s)))
+    }
+    when len(vd) == 0 {
+      cspec[4] = 0
+      give head
+    }
+    hold vn = dbg_num(vd)
+    when vn < 0 {
+      cspec[4] = 0
+      give head
+    }
+    when vneg == 1 {
+      cval = 0 - vn
+    } otherwise {
+      cval = vn
+    }
+  }
+  cspec[0] = rid
+  cspec[1] = opc
+  cspec[2] = cval
+  cspec[3] = is_raw
+  give head
+}
+
+make dbg_dir_of(p: str) -> str {
+  hold i = len(p) - 1
+  while i >= 0 {
+    when sx_index(p, i) == 47 {
+      when i == 0 {
+        give "/"
+      }
+      give slice_ir(p, 0, i)
+    }
+    i = i - 1
+  }
+  give "."
+}
+
+make dbg_load_lmap(lmap_text: str, lm_offs: list, lm_lines: list) -> num {
+  hold n = len(lmap_text)
+  hold p = 0
+  while p < n {
+    hold e = p
+    while e < n && sx_index(lmap_text, e) != 10 {
+      e = e + 1
+    }
+    hold ln_s = trim_ir(slice_ir(lmap_text, p, e))
+    when len(ln_s) > 0 {
+      hold w1 = dbg_word(ln_s)
+      hold w2 = dbg_rest(ln_s)
+      hold off = dbg_num(concat("0x", w1))
+      hold lno = dbg_num(w2)
+      when off >= 0 && lno > 0 {
+        lm_offs = push(lm_offs, off)
+        lm_lines = push(lm_lines, lno)
+      }
+    }
+    p = e + 1
+  }
+  give len(lm_offs)
+}
+
+make dbg_line_for_src(lm_offs: list, lm_lines: list, src_off: num) -> num {
+  hold n = len(lm_offs)
+  hold best_off = 0 - 1
+  hold best_ln = 0
+  hold i = 0
+  while i < n {
+    hold o = lm_offs[i]
+    when o <= src_off && o >= best_off {
+      best_off = o
+      best_ln = lm_lines[i]
+    }
+    i = i + 1
+  }
+  give best_ln
+}
+
+make dbg_src_text_line(src_txt: str, want_ln: num) -> str {
+  hold n = len(src_txt)
+  hold p = 0
+  hold cur = 1
+  while p <= n {
+    hold e = p
+    while e < n && sx_index(src_txt, e) != 10 {
+      e = e + 1
+    }
+    when cur == want_ln {
+      hold raw = slice_ir(src_txt, p, e)
+      when len(raw) > 0 && sx_index(raw, len(raw) - 1) == 13 {
+        raw = slice_ir(raw, 0, len(raw) - 1)
+      }
+      give raw
+    }
+    cur = cur + 1
+    p = e + 1
+  }
+  give ""
 }
 
 // The source offset of the instruction at <ip>: the last mapping at or below it.
@@ -1411,13 +1686,14 @@ make dbg_bt(ret_ips: list, map_ips: list, map_offs: list) -> num {
 }
 
 make dbg_help() -> num {
-  show "sxdbg: break <ip> | break src 0x<off> | delete <ip> | clear | info"
+  show "sxdbg: break <ip> | break src 0x<off> | break line <n> [if <reg> <op> <val>]"
+  show "sxdbg: delete <ip> | clear | info | line"
   show "sxdbg: step [k] | next | continue | regs | reg <name> | mem <addr> [n]"
   show "sxdbg: where | bt | help | quit"
   give 0
 }
 
-make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_script: str) -> num {
+make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_script: str, lmap_dir: str) -> num {
   hold ins = []
   hold map_offs = []
   hold map_ips = []
@@ -1526,6 +1802,10 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
             }
             when handled == 0 && string_eq(mn, "RET") == 1 {
               ins = push_ins(ins, 11, 0, 0, 0, 0, 0)
+              handled = 1
+            }
+            when handled == 0 && string_eq(mn, "SYSCALL") == 1 {
+              ins = push_ins(ins, 32, 0, 0, 0, 0, 0)
               handled = 1
             }
             when handled == 0 && string_eq(mn, "PUSH") == 1 {
@@ -1802,13 +2082,32 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
     }
   }
   hold dq_bps = []
+  hold dq_bp_meta = []
   hold dq_bslot = 0
   while dq_bslot < 64 {
     dq_bps = push(dq_bps, 0)
+    dq_bp_meta = push(dq_bp_meta, 0 - 1)
+    dq_bp_meta = push(dq_bp_meta, 0)
+    dq_bp_meta = push(dq_bp_meta, 0)
+    dq_bp_meta = push(dq_bp_meta, 0)
     dq_bslot = dq_bslot + 1
   }
   hold dq_dbg_bpn = [0]
   hold dq_dbg_st = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold lm_offs = []
+  hold lm_lines = []
+  hold lm_src = ""
+  when dq_dbg_on == 1 && len(lmap_dir) > 0 {
+    hold lm_path = concat(lmap_dir, "/lines.map")
+    when path_kind(lm_path) == 1 {
+      hold lm_raw = read_file(lm_path)
+      hold z_lm = dbg_load_lmap(lm_raw, lm_offs, lm_lines)
+    }
+    hold lms_path = concat(lmap_dir, "/lines.map.src")
+    when path_kind(lms_path) == 1 {
+      lm_src = read_file(lms_path)
+    }
+  }
 
   hold cf = 0
   hold zf = 0
@@ -1849,7 +2148,7 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
       when dq_dnext == 1 && len(ret_ips) <= dq_dnext_at {
         dq_dstop = 1
       }
-      when dbg_has(dq_bps, dq_dbg_bpn[0], ip) == 1 {
+      when dbg_bp_hit(dq_bps, dq_bp_meta, dq_dbg_bpn[0], ip, regs_hi, regs_lo) == 1 {
         dq_dstop = 1
       }
       when dq_dstop == 1 {
@@ -1902,27 +2201,81 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
             }
             when string_eq(dq_dw1, "break") == 1 || string_eq(dq_dw1, "b") == 1 {
               dq_dbg_st[7] = 1
-              hold dq_bkind = dbg_word(dq_dwn)
-              when string_eq(dq_bkind, "src") == 1 {
-                hold dq_boff = dbg_num(dbg_rest(dq_dwn))
-                when dq_boff < 0 {
-                  show "sxdbg: break expects an ip or: break src 0x<offset>"
-                } otherwise {
-                  hold dq_bip = lookup_off_ip(map_offs, map_ips, dq_boff)
-                  when dq_bip < 0 {
-                    show concat("sxdbg: no instruction carries source offset 0x", dbg_hex6(dq_boff))
-                  } otherwise {
-                    hold dq_bn0 = dbg_bp_add(dq_bps, dq_dbg_bpn, dq_bip)
-                    show concat("sxdbg: break at ip ", concat(istr_ir(dq_bip), concat(" (src 0x", concat(dbg_hex6(dq_boff), ")"))))
-                  }
-                }
+              hold dq_cspec = [0 - 1, 0, 0, 0, 1]
+              hold dq_bhead = dbg_parse_break_if(dq_dwn, dq_cspec)
+              when dq_cspec[4] == 0 {
+                show "sxdbg: invalid breakpoint condition (expected: if <reg> <op> <num>)"
               } otherwise {
-                hold dq_bn = dbg_num(dq_bkind)
-                when dq_bn < 0 || dq_bn >= nins {
-                  show concat("sxdbg: no instruction ", dq_bkind)
+                hold dq_csuf = ""
+                when dq_cspec[0] >= 0 {
+                  hold tmp_cm = [dq_cspec[0], dq_cspec[1], dq_cspec[2], dq_cspec[3]]
+                  dq_csuf = concat(" if ", dbg_cond_fmt(tmp_cm, 0))
+                }
+                hold dq_bkind = dbg_word(dq_bhead)
+                hold dq_brest = dbg_rest(dq_bhead)
+                when string_eq(dq_bkind, "src") == 1 {
+                  hold dq_boff = dbg_num(dq_brest)
+                  when dq_boff < 0 {
+                    show "sxdbg: break expects an ip, break line <n>, or: break src 0x<offset>"
+                  } otherwise {
+                    hold dq_bip = lookup_off_ip(map_offs, map_ips, dq_boff)
+                    when dq_bip < 0 {
+                      show concat("sxdbg: no instruction carries source offset 0x", dbg_hex6(dq_boff))
+                    } otherwise {
+                      hold dq_bn0 = dbg_bp_add_ext(dq_bps, dq_bp_meta, dq_dbg_bpn, dq_bip, dq_cspec)
+                      show concat("sxdbg: break at ip ", concat(istr_ir(dq_bip), concat(" (src 0x", concat(dbg_hex6(dq_boff), concat(")", dq_csuf)))))
+                    }
+                  }
                 } otherwise {
-                  hold dq_bn1 = dbg_bp_add(dq_bps, dq_dbg_bpn, dq_bn)
-                  show concat("sxdbg: break at ip ", istr_ir(dq_bn))
+                  when string_eq(dq_bkind, "line") == 1 {
+                    hold dq_bln = dbg_num(dq_brest)
+                    when dq_bln <= 0 {
+                      show "sxdbg: break line expects a positive line number"
+                    } otherwise {
+                      when len(lm_offs) == 0 {
+                        show "sxdbg: no source line table available"
+                      } otherwise {
+                        hold best_k = 0 - 1
+                        hold best_ln2 = 0
+                        hold best_mi = 0 - 1
+                        hold lk = 0
+                        while lk < len(lm_offs) {
+                          hold cand_ln = lm_lines[lk]
+                          hold cand_mi = lookup_off_ge_idx(map_offs, lm_offs[lk])
+                          when cand_mi >= 0 {
+                            when cand_ln == dq_bln && (best_k < 0 || best_ln2 != dq_bln) {
+                              best_k = lk
+                              best_ln2 = cand_ln
+                              best_mi = cand_mi
+                            } otherwise {
+                              when cand_ln > dq_bln && best_ln2 != dq_bln && (best_k < 0 || cand_ln < best_ln2) {
+                                best_k = lk
+                                best_ln2 = cand_ln
+                                best_mi = cand_mi
+                              }
+                            }
+                          }
+                          lk = lk + 1
+                        }
+                        when best_k < 0 || best_mi < 0 {
+                          show concat("sxdbg: no instruction mapped at or after line ", istr_ir(dq_bln))
+                        } otherwise {
+                          hold dq_lip = map_ips[best_mi]
+                          hold dq_loff = map_offs[best_mi]
+                          hold dq_bnl = dbg_bp_add_ext(dq_bps, dq_bp_meta, dq_dbg_bpn, dq_lip, dq_cspec)
+                          show concat("sxdbg: break at ip ", concat(istr_ir(dq_lip), concat(" (line ", concat(istr_ir(best_ln2), concat(", src 0x", concat(dbg_hex6(dq_loff), concat(")", dq_csuf)))))))
+                        }
+                      }
+                    }
+                  } otherwise {
+                    hold dq_bn = dbg_num(dq_bkind)
+                    when dq_bn < 0 || dq_bn >= nins {
+                      show concat("sxdbg: no instruction ", dq_bkind)
+                    } otherwise {
+                      hold dq_bn1 = dbg_bp_add_ext(dq_bps, dq_bp_meta, dq_dbg_bpn, dq_bn, dq_cspec)
+                      show concat("sxdbg: break at ip ", concat(istr_ir(dq_bn), dq_csuf))
+                    }
+                  }
                 }
               }
             }
@@ -1932,7 +2285,7 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
               when dq_dn < 0 {
                 show "sxdbg: delete expects an ip"
               } otherwise {
-                hold dq_dn1 = dbg_bp_del(dq_bps, dq_dbg_bpn, dq_dn)
+                hold dq_dn1 = dbg_bp_del_ext(dq_bps, dq_bp_meta, dq_dbg_bpn, dq_dn)
                 show concat("sxdbg: deleted ip ", concat(istr_ir(dq_dn), concat("; ", concat(istr_ir(dq_dn1), " breakpoints"))))
               }
             }
@@ -1943,7 +2296,21 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
             }
             when string_eq(dq_dw1, "info") == 1 || string_eq(dq_dw1, "i") == 1 {
               dq_dbg_st[7] = 1
-              hold dq_dinfo = dbg_bps(dq_bps, dq_dbg_bpn[0])
+              hold dq_dinfo = dbg_bps_ext(dq_bps, dq_bp_meta, dq_dbg_bpn[0])
+            }
+            when string_eq(dq_dw1, "line") == 1 || string_eq(dq_dw1, "l") == 1 {
+              dq_dbg_st[7] = 1
+              when len(lm_offs) == 0 || dq_nsrc < 0 {
+                show "sxdbg: no source line table available"
+              } otherwise {
+                hold dq_cln = dbg_line_for_src(lm_offs, lm_lines, dq_nsrc)
+                when dq_cln <= 0 {
+                  show concat("sxdbg: no source line mapped at src 0x", dbg_hex6(dq_nsrc))
+                } otherwise {
+                  hold dq_cltxt = dbg_src_text_line(lm_src, dq_cln)
+                  show concat("sxdbg: line ", concat(istr_ir(dq_cln), concat(": ", dq_cltxt)))
+                }
+              }
             }
             when string_eq(dq_dw1, "where") == 1 || string_eq(dq_dw1, "w") == 1 {
               dq_dbg_st[7] = 1
@@ -2201,11 +2568,17 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
       zf = 0
       sf = 0
       pf = 0
-      when cv0 < cv1 {
+      when cv0 != cv0 || cv1 != cv1 {
         cf = 1
+        zf = 1
+        pf = 1
       } otherwise {
-        when cv0 == cv1 {
-          zf = 1
+        when cv0 < cv1 {
+          cf = 1
+        } otherwise {
+          when cv0 == cv1 {
+            zf = 1
+          }
         }
       }
     }
@@ -2279,6 +2652,24 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
         take = 1
       }
       when a0 == 5 && zf == 0 {
+        take = 1
+      }
+      when a0 == 6 && pf == 1 {
+        take = 1
+      }
+      when a0 == 7 && pf == 0 {
+        take = 1
+      }
+      when a0 == 8 && sf == 1 {
+        take = 1
+      }
+      when a0 == 9 && sf == 0 {
+        take = 1
+      }
+      when a0 == 10 && (zf == 1 || sf == 1) {
+        take = 1
+      }
+      when a0 == 11 && zf == 0 && sf == 0 {
         take = 1
       }
       when take == 1 {
@@ -2519,6 +2910,42 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
         // gccheck: no-op unless heap exceeds threshold
       }
     }
+    when op == 32 {
+      hold sc_no = regs_lo[0]
+      when sc_no == 1 {
+        hold sc_fd = regs_lo[7]
+        hold sc_buf = regs_lo[6]
+        hold sc_cnt = regs_lo[2]
+        hold sc_txt = ""
+        hold sc_i = 0
+        while sc_i < sc_cnt {
+          sc_txt = concat(sc_txt, chr(vm_read_byte(sc_buf + sc_i, data, stack, heap)))
+          sc_i = sc_i + 1
+        }
+        when sc_fd == 1 {
+          hold w_sc1 = write_out(sc_txt)
+        } otherwise {
+          when sc_fd == 2 {
+            hold w_sc2 = write_file("/dev/stderr", sc_txt)
+          } otherwise {
+            hold f_scfd = fail_ir(1, concat("unsupported SYSCALL write fd in IR VM: ", istr_ir(sc_fd)))
+          }
+        }
+        regs_hi[0] = 0
+        regs_lo[0] = sc_cnt
+      } otherwise {
+        when sc_no == 60 {
+          hold sc_code = bit_and(regs_lo[7], 255)
+          when sc_code == 0 {
+            running = 0
+          } otherwise {
+            hold ex_sc = exit(sc_code)
+          }
+        } otherwise {
+          hold f_scno = fail_ir(1, concat("unsupported SYSCALL number in IR VM: ", istr_ir(sc_no)))
+        }
+      }
+    }
 
     ip = next_ip
   }
@@ -2563,7 +2990,7 @@ make run_ir_bundle(ir_path: str, data_path: str, patch_path: str) -> num {
     hold f3 = fail_ir(1, concat("cannot read patch table: ", patch_path))
   }
   hold pargs = []
-  give execute_ir(ir_text, data, patch_bs, pargs, "")
+  give execute_ir(ir_text, data, patch_bs, pargs, "", "")
 }
 
 // The debugger front end: same bundle, same loader, one debugger script
@@ -2584,7 +3011,7 @@ make run_ir_bundle_dbg(ir_path: str, data_path: str, patch_path: str, dbg_script
     hold f3 = fail_ir(1, concat("cannot read patch table: ", patch_path))
   }
   hold pargs = []
-  give execute_ir(ir_text, data, patch_bs, pargs, dbg_script)
+  give execute_ir(ir_text, data, patch_bs, pargs, dbg_script, dbg_dir_of(ir_path))
 }
 
 // Emit the portable IR bundle for <src> into <work>: prog.ir, data.bin and
@@ -2593,10 +3020,16 @@ make run_ir_bundle_dbg(ir_path: str, data_path: str, patch_path: str, dbg_script
 make emit_bundle(src: str, work: str) -> num {
   hold mk = run_command(concat("mkdir -p ", work))
   hold log_p = concat(work, "/emit.log")
+  hold lmap_p = concat(work, "/lines.map")
   hold elf_p = concat(work, "/unused.elf")
   hold ir_p = concat(work, "/prog.ir")
-  hold cmd1 = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", concat(work, concat(" ./selfhost/native_aot ", concat(src, concat(" ", elf_p)))))))
+  hold env_pre = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", concat(work, concat(" SX_LINE_MAP=", lmap_p)))))
+  hold cmd1 = concat(env_pre, concat(" ./selfhost/native_aot ", concat(src, concat(" ", concat(elf_p, " 2>/dev/null")))))
   hold rc1 = run_command(cmd1)
+  when rc1 != 0 && path_kind("./tools/sxc_native") == 1 {
+    hold cmd1b = concat(env_pre, concat(" ./tools/sxc_native ", concat(src, concat(" ", elf_p))))
+    rc1 = run_command(cmd1b)
+  }
   when rc1 != 0 {
     hold f1 = fail_ir(1, concat("native_aot failed on: ", src))
   }
@@ -2614,8 +3047,13 @@ make compile_and_run_ir(src: str, work: str) -> num {
   hold log_p = concat(work, "/emit.log")
   hold elf_p = concat(work, "/unused.elf")
   hold ir_p = concat(work, "/prog.ir")
-  hold cmd1 = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", concat(work, concat(" ./selfhost/native_aot ", concat(src, concat(" ", elf_p)))))))
+  hold env_pre = concat("SX_EMIT_LOG=", concat(log_p, concat(" SX_LINK_DUMP=", work)))
+  hold cmd1 = concat(env_pre, concat(" ./selfhost/native_aot ", concat(src, concat(" ", concat(elf_p, " 2>/dev/null")))))
   hold rc1 = run_command(cmd1)
+  when rc1 != 0 && path_kind("./tools/sxc_native") == 1 {
+    hold cmd1b = concat(env_pre, concat(" ./tools/sxc_native ", concat(src, concat(" ", elf_p))))
+    rc1 = run_command(cmd1b)
+  }
   when rc1 != 0 {
     hold f1 = fail_ir(1, concat("native_aot failed on: ", src))
   }

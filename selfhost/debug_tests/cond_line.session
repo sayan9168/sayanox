@@ -1,0 +1,12 @@
+# Source-line table (`line`, `break line <n>`) and conditional breakpoint
+# (`if DI == 2`) session over fact.sa. Skips fact(1) and fact(3), stopping
+# only on the two calls where n == 2.
+break line 5 if DI == 2
+info
+continue
+line
+reg DI
+continue
+line
+reg DI
+continue

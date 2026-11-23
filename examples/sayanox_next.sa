@@ -1,0 +1,67 @@
+// examples/sayanox_next.sa -- Sayanox-original language constructs in concert:
+//   1. Value pipelines: `expr |> fn(args...)` with `_` hole placement
+//   2. Lexical state transactions: `trial { ... } otherwise { ... }` + `rewind`
+//   3. Bounded fixed-point loops: `converge VAR within BOUND { ... } otherwise { ... }`
+//   4. Self-healing contracts: `invariant COND otherwise { ... }`
+
+make clamp_floor(v: num, lo: num) -> num {
+  when v < lo {
+    give lo
+  }
+  give v
+}
+
+make blend(cur: num, target: num) -> num {
+  hold delta = target - cur
+  when delta == 0 {
+    give cur
+  }
+  when delta > 0 {
+    when delta == 1 { give target }
+    give cur + (delta - delta % 2) / 2
+  }
+  hold ad = 0 - delta
+  when ad == 1 { give target }
+  give cur - (ad - ad % 2) / 2
+}
+
+make label_metric(tag: str, val: str) -> str {
+  give concat(concat(tag, "="), val)
+}
+
+// 1. Value pipeline with explicit `_` hole
+hold target_temp = 18 |> clamp_floor(20) |> blend(_, 60)
+show target_temp
+
+// 2. Speculative state update with atomic `rewind`
+hold budget = 120
+hold audit = "clean"
+trial {
+  budget = budget - 160
+  audit = "over-allocated"
+  when budget < 0 {
+    rewind
+  }
+} otherwise {
+  audit = concat(audit, ":rolled-back")
+}
+show budget
+show audit
+
+// 3. Bounded fixed-point convergence toward target_temp
+hold reading = 0
+converge reading within 16 {
+  reading = blend(reading, target_temp)
+} otherwise {
+  reading = target_temp
+}
+show reading
+
+// 4. Self-healing runtime invariant
+hold reserve = 0 - 5
+invariant reserve >= 10 otherwise {
+  reserve = 10
+}
+invariant reserve >= 10
+show "reserve" |> label_metric(_, "ok")
+show reserve

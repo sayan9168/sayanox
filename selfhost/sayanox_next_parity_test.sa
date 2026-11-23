@@ -1,0 +1,71 @@
+// Cross-backend 8-way parity oracle for Sayanox's four original language
+// constructs: value pipelines (`|>` with `_`), lexical state transactions
+// (`trial` / `rewind` / `otherwise`), bounded fixed-point loops (`converge` /
+// `within` / `otherwise`), and self-healing `invariant` contracts.
+
+make affine(x: num, scale: num, bias: num) -> num {
+  give x * scale + bias
+}
+
+make wrap_tag(tag: str, body: str) -> str {
+  give concat(concat(tag, ":"), body)
+}
+
+// 1. Value pipeline `|>` (implicit first-arg + explicit `_` placeholder)
+hold pv = 4 |> affine(3, 2) |> affine(10, _, 5)
+show pv
+hold ps = "core" |> wrap_tag("sx", _) |> wrap_tag("v2", _)
+show ps
+
+// 2. Transactional `trial` / `rewind` / `otherwise` over num + str bindings
+hold credits = 50
+hold status = "ready"
+trial {
+  credits = credits - 80
+  status = "overdrawn"
+  when credits < 0 {
+    rewind
+  }
+  credits = 999
+} otherwise {
+  status = concat(status, "-restored")
+}
+show credits
+show status
+
+// Committed `trial` (no rewind -> `otherwise` skipped)
+trial {
+  credits = credits + 25
+  status = "committed"
+} otherwise {
+  credits = 0
+}
+show credits
+show status
+
+// 3. Bounded fixed-point `converge VAR within BOUND` (converged + exhausted)
+hold est = 28
+converge est within 10 {
+  when est > 10 {
+    est = est - 6
+  }
+} otherwise {
+  est = 0 - 1
+}
+show est
+
+hold drift = 1
+converge drift within 4 {
+  drift = drift + 2
+} otherwise {
+  drift = 404
+}
+show drift
+
+// 4. Self-healing `invariant COND otherwise { ... }` + plain `invariant COND`
+hold pressure = 0 - 12
+invariant pressure >= 0 otherwise {
+  pressure = 100
+}
+invariant pressure == 100
+show pressure

@@ -1584,8 +1584,8 @@ make jd_replace_at(doc: str, start: num, raw_val: str) -> str {
 
 // The container text that holds one path segment: an array when the segment is
 // a decimal index, an object otherwise. A decimal index above 0 is refused
-// because it would need padding, and a segment that is not a valid JSON key is
-// refused. `inner` is the value that goes inside.
+// because it would need padding; jd_check_path validates object key spellings
+// up front before traversal begins. `inner` is the value that goes inside.
 make jd_new_container(seg: str, inner: str) -> str {
   hold idx = jd_seg_index(seg)
   when idx >= 0 {
@@ -1595,9 +1595,6 @@ make jd_new_container(seg: str, inner: str) -> str {
     give concat(concat("[", inner), "]")
   }
   hold key = concat(concat("\"", seg), "\"")
-  when jd_valid(key) == 0 {
-    give ""
-  }
   give concat(concat(concat("{", key), concat(":", inner)), "}")
 }
 
@@ -1667,9 +1664,6 @@ make jd_append_child(doc: str, parent: num, key: str, raw_val: str, is_array: nu
   hold pair = raw_val
   when is_array == 0 {
     hold quoted = concat(concat("\"", key), "\"")
-    when jd_valid(quoted) == 0 {
-      give ""
-    }
     hold pair = concat(quoted, concat(":", raw_val))
   }
   hold close = end - 1

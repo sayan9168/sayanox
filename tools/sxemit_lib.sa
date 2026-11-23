@@ -493,7 +493,7 @@ make emit_call_builtin(src: str, st: list, pool: list, est: list, data: list, n:
       est = emit_d2i(est)
       est = mv_rr(est, 7, 0)
       est = mov_imm64(est, 0, 60)
-      est = syscall_inst(est)
+      est = syscall_log_inst(est)
       est = mov_imm64(est, 0, 0)
       hold zex = sw_st(src, st)
       when at(src, sn, st[0]) != 41 {
@@ -1191,6 +1191,16 @@ make emit_prim(src: str, st: list, pool: list, est: list, data: list, depth: num
       st[31] = 0 - 1
       give est
     }
+    when string_eq(n, "_") == 1 && st[40] == 1 {
+      est = load_global_em(est, st, st[41])
+      st[30] = st[42]
+      when st[42] == 3 {
+        st[31] = st[43]
+      } otherwise {
+        st[31] = 0 - 1
+      }
+      give est
+    }
     when st[5] >= 0 {
       hold cfb = f_base(st[5])
       hold cnp = st[cfb + 1]
@@ -1336,9 +1346,19 @@ make emit_prim(src: str, st: list, pool: list, est: list, data: list, depth: num
 
     // Function or builtin call: name( ... )
     when at(src, sn, qpos) == 40 {
+      hold old_pipe_em = st[40]
+      when old_pipe_em == 2 {
+        st[40] = 1
+      } otherwise {
+        when old_pipe_em == 1 {
+          st[40] = 0
+        }
+      }
       when builtin_arity_st(st, n) >= 0 {
         st[0] = qpos
-        give emit_call_builtin(src, st, pool, est, data, n, depth)
+        est = emit_call_builtin(src, st, pool, est, data, n, depth)
+        st[40] = old_pipe_em
+        give est
       }
       hold fi = f_find(st, pool, n)
       when fi >= 0 {
@@ -1434,6 +1454,7 @@ make emit_prim(src: str, st: list, pool: list, est: list, data: list, depth: num
             }
           }
         }
+        st[40] = old_pipe_em
         when st[fb + 2] == 1 {
           fi = pick_instance(st, pool, fi, kinds, nargs)
           fb = f_base(fi)
@@ -1476,9 +1497,16 @@ make emit_prim(src: str, st: list, pool: list, est: list, data: list, depth: num
         }
         give est
       }
+      st[40] = old_pipe_em
     }
 
     st[0] = after_n
+    when string_eq(n, "_") == 1 {
+      hold gj_ph = g_find(st, pool, n)
+      when gj_ph < 0 {
+        hold eph_em = fail(1, "placeholder '_' is only valid inside a '|>' pipeline call")
+      }
+    }
     when string_eq(n, "and") == 1 || string_eq(n, "or") == 1 || string_eq(n, "not") == 1 {
       hold ewo = fail(1, concat(concat("'", n), "' is a full-language word operator and not in the native subset here (native takes and/or/not in when/while conditions; use selfhost/gen2 for the other forms)"))
     }
@@ -1734,8 +1762,57 @@ make emit_rel(src: str, st: list, pool: list, est: list, data: list, depth: num)
   give est
 }
 
-make emit_expr(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+make emit_pipe(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
   est = emit_rel(src, st, pool, est, data, depth)
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    when at(src, sn, st[0]) == 124 && at(src, sn, st[0] + 1) == 62 {
+      st[0] = st[0] + 2
+      hold lhs_k = st[30]
+      hold lhs_sid = st[31]
+      when lhs_k < 0 {
+        hold epk = fail(1, "cannot infer the type of the |> input value")
+      }
+      hold pid = st[35]
+      st[35] = pid + 1
+      hold pgi = for_hidden_em(st, pool, "pipe", pid, lhs_k)
+      when lhs_k == 3 {
+        hold pgb = g_base(pgi)
+        st[pgb + 2] = lhs_sid
+      }
+      est = store_global_em(est, st, pgi)
+      hold sp_out = [0]
+      hold call_txt = pipe_scan_call(src, sn, st[0], sp_out)
+      hold after_call = sp_out[0]
+      hold old_sn = st[1]
+      hold old40 = st[40]
+      hold old41 = st[41]
+      hold old42 = st[42]
+      hold old43 = st[43]
+      st[0] = 0
+      st[1] = len(call_txt)
+      st[40] = 2
+      st[41] = pgi
+      st[42] = lhs_k
+      st[43] = lhs_sid
+      est = emit_prim(call_txt, st, pool, est, data, depth + 1)
+      st[40] = old40
+      st[41] = old41
+      st[42] = old42
+      st[43] = old43
+      st[1] = old_sn
+      st[0] = after_call
+    } otherwise {
+      go = 0
+    }
+  }
+  give est
+}
+
+make emit_expr(src: str, st: list, pool: list, est: list, data: list, depth: num) -> list {
+  est = emit_pipe(src, st, pool, est, data, depth)
   hold z = sw_st(src, st)
   hold sn = st[1]
   hold c0 = at(src, sn, st[0])
@@ -1781,7 +1858,7 @@ make emit_expr(src: str, st: list, pool: list, est: list, data: list, depth: num
   st[0] = st[0] + oplen
   est = push_r(est, 0)
   hold lk = st[30]
-  est = emit_rel(src, st, pool, est, data, depth)
+  est = emit_pipe(src, st, pool, est, data, depth)
   est = pop_r(est, 1)
   when lk == 1 {
     when st[30] != 1 {
@@ -2349,6 +2426,9 @@ make emit_fn(src: str, st: list, pool: list, est: list, data: list, lp_st: list,
   hdr = concat(hdr, hex_off6(here_global(est)))
   hdr = concat(hdr, " ---")
   est = ilogc(est, hdr)
+  when st[45] == 1 {
+    lp_st = lp_record(lp_st, here_global(est), 9, line_at_em(src, st, st[0]))
+  }
   est = push_r(est, 5)
   est = mv_rr(est, 5, 4)
   est = sub_rsp_imm32_slot(est)
@@ -2503,6 +2583,659 @@ make emit_numeric_field_store(src: str, st: list, pool: list, est: list, data: l
   give est
 }
 
+make line_at_em(src: str, st: list, pos: num) -> num {
+  when st[47] == 0 {
+    st[46] = 0
+    st[47] = 1
+  }
+  when pos < st[46] {
+    st[46] = 0
+    st[47] = 1
+  }
+  hold i = st[46]
+  hold ln = st[47]
+  hold sn = len(src)
+  hold lim = pos
+  when lim > sn {
+    lim = sn
+  }
+  while i < lim {
+    when sx_index(src, i) == 10 {
+      ln = ln + 1
+    }
+    i = i + 1
+  }
+  st[46] = lim
+  st[47] = ln
+  give ln
+}
+
+make match_brace_em(src: str, sn: num, open_at: num) -> num {
+  hold i = open_at + 1
+  hold depth = 1
+  while i < sn && depth > 0 {
+    hold c = sx_index(src, i)
+    when c == 34 {
+      i = i + 1
+      while i < sn && sx_index(src, i) != 34 {
+        when sx_index(src, i) == 92 && i + 1 < sn {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      when i < sn {
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < sn && sx_index(src, i + 1) == 47 {
+        while i < sn && sx_index(src, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when c == 123 {
+          depth = depth + 1
+        }
+        when c == 125 {
+          depth = depth - 1
+          when depth == 0 {
+            give i
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+  hold emb = fail(1, "unclosed '{' block")
+  give sn
+}
+
+make eval_span_em(src: str, st: list, pool: list, est: list, data: list, s0: num, e0: num, what: str) -> list {
+  hold s = s0
+  hold e = e0
+  while s < e && is_space(sx_index(src, s)) == 1 {
+    s = s + 1
+  }
+  while e > s && is_space(sx_index(src, e - 1)) == 1 {
+    e = e - 1
+  }
+  when s >= e {
+    hold e1 = fail(1, concat("missing expression in ", what))
+  }
+  hold sub_s = sub(src, s, e)
+  hold saved_p = st[0]
+  hold saved_sn = st[1]
+  st[0] = 0
+  st[1] = len(sub_s)
+  est = emit_expr(sub_s, st, pool, est, data, 0)
+  hold z = sw_st(sub_s, st)
+  hold rem_p = st[0]
+  hold rem_sn = st[1]
+  st[0] = saved_p
+  st[1] = saved_sn
+  when rem_p < rem_sn {
+    hold e2 = fail(1, concat("unexpected text in ", what))
+  }
+  give est
+}
+
+make emit_invariant_st(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num) -> list {
+  hold neg1 = 0 - 1
+  hold sn = st[1]
+  hold cs = st[0]
+  hold ce = inv_cond_end(src, sn, cs)
+  hold ok_jl = []
+  est = gen_cond_live(src, st, pool, est, data, cs, ce, 1, ok_jl, "invariant")
+  st[0] = ce
+  hold z1 = sw_st(src, st)
+  when at(src, sn, st[0]) == 123 {
+    hold eiv0 = fail(1, "invariant takes an optional 'otherwise { ... }' block, not a bare '{ ... }'")
+  }
+  when mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 {
+    hold z2 = sw_st(src, st)
+    when at(src, sn, st[0]) != 123 {
+      hold eiv1 = fail(1, "invariant otherwise needs { ... }")
+    }
+    st[0] = st[0] + 1
+    est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+    est = gen_cond_live(src, st, pool, est, data, cs, ce, 1, ok_jl, "invariant")
+    hold moff2 = d_next_off(data)
+    data = d_str_alloc(data, "sx: invariant repair failed\n")
+    est = lea_rm(est, 0, 12, neg1, 0, moff2)
+    est = callb(est, 20)
+    est = jl_patch6(est, ok_jl, here_local(est))
+    give est
+  }
+  hold moff1 = d_next_off(data)
+  data = d_str_alloc(data, "sx: invariant failed\n")
+  est = lea_rm(est, 0, 12, neg1, 0, moff1)
+  est = callb(est, 20)
+  est = jl_patch6(est, ok_jl, here_local(est))
+  hold es_iv = endstmt_st(src, st)
+  give est
+}
+
+make emit_converge_st(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num) -> list {
+  hold neg1 = 0 - 1
+  hold sn = st[1]
+  hold z0 = sw_st(src, st)
+  hold nm = pid_st(src, st)
+  when len(nm) == 0 {
+    hold ec0 = fail(1, "converge needs a variable name: converge VAR within BOUND { ... }")
+  }
+  hold pi_c = 0 - 1
+  hold gi_c = 0 - 1
+  hold vk_c = 0 - 1
+  when st[5] >= 0 {
+    hold cfb = f_base(st[5])
+    hold cnp = st[cfb + 1]
+    hold pj = 0
+    while pj < cnp {
+      hold pns = fn_pn_slot(cfb, pj)
+      when pool_eq(pool, st[pns], nm) == 1 {
+        pi_c = pj
+        hold pks = fn_pk_slot(cfb, pj)
+        vk_c = st[pks]
+        pj = cnp
+      }
+      pj = pj + 1
+    }
+  }
+  when pi_c < 0 {
+    gi_c = g_find(st, pool, nm)
+    when gi_c < 0 {
+      hold ec1 = fail(1, concat(concat("converge needs an existing variable '", nm), "' (hold it first)"))
+    }
+    hold gb_c = g_base(gi_c)
+    vk_c = st[gb_c + 1]
+    when vk_c < 0 {
+      hold ec2 = fail(1, concat(concat("converge needs an initialized variable '", nm), "'"))
+    }
+  }
+  when vk_c != 0 && vk_c != 1 {
+    hold ec3 = fail(1, "converge target must be a number or string")
+  }
+  hold z1 = sw_st(src, st)
+  when mkw_st(src, st, "within") == 0 {
+    hold ec4 = fail(1, "converge needs 'within': converge VAR within BOUND { ... }")
+  }
+  hold bs = st[0]
+  hold be = cond_end(src, sn, bs)
+  est = eval_span_em(src, st, pool, est, data, bs, be, "converge bound")
+  when st[30] != 0 {
+    hold ec5 = fail(1, "converge bound must be a number")
+  }
+  hold cid = st[35]
+  st[35] = cid + 1
+  hold rem_gi = for_hidden_em(st, pool, "crem", cid, 0)
+  hold prev_gi = for_hidden_em(st, pool, "cprev", cid, vk_c)
+  est = store_global_em(est, st, rem_gi)
+
+  hold top_c = here_local(est)
+  est = load_global_em(est, st, rem_gi)
+  est = movq_xr(est, 0, 0)
+  est = xor_rr(est, 1, 1)
+  est = movq_xr(est, 1, 1)
+  est = ucomisd(est, 0, 1)
+  hold exh_at = here_local(est)
+  est = jcc_rel32(est, 6, 0)
+
+  // rem = rem - 1.0
+  est = load_global_em(est, st, rem_gi)
+  est = movq_xr(est, 0, 0)
+  est = mov_imm64_hl(est, 1, 1072693248, 0)
+  est = movq_xr(est, 1, 1)
+  est = subsd(est, 0, 1)
+  est = movq_rx(est, 0, 0)
+  est = store_global_em(est, st, rem_gi)
+
+  // prev = VAR
+  when pi_c >= 0 {
+    est = load_param_em(est, pi_c)
+  } otherwise {
+    est = load_global_em(est, st, gi_c)
+  }
+  est = store_global_em(est, st, prev_gi)
+
+  st[0] = be
+  hold zb = sw_st(src, st)
+  when at(src, sn, st[0]) != 123 {
+    hold ec6 = fail(1, "converge needs { ... }")
+  }
+  st[0] = st[0] + 1
+  when st[34] >= 64 {
+    hold ec7 = fail(1, "native loop nesting limit is 64")
+  }
+  hold my_depth = st[34]
+  st[34] = my_depth + 1
+  est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  st[34] = my_depth
+
+  // continue checks fixed-point convergence right after the current step
+  est = lp_patch(est, lp_st, my_depth, 1, here_local(est))
+  when pi_c >= 0 {
+    est = load_param_em(est, pi_c)
+  } otherwise {
+    est = load_global_em(est, st, gi_c)
+  }
+  est = push_r(est, 0)
+  est = load_global_em(est, st, prev_gi)
+  est = mv_rr(est, 1, 0)
+  est = pop_r(est, 0)
+  hold conv_jl = []
+  when vk_c == 1 {
+    est = mv_rr(est, 7, 0)
+    est = mv_rr(est, 6, 1)
+    est = callb(est, 2)
+    est = test_rr(est, 0, 0)
+    hold jstr_eq = here_local(est)
+    est = jcc_rel32(est, 5, 0)
+    conv_jl = push(conv_jl, jstr_eq)
+  } otherwise {
+    est = movq_xr(est, 0, 0)
+    est = movq_xr(est, 1, 1)
+    est = ucomisd(est, 0, 1)
+    hold jp_nan = here_local(est)
+    est = jcc_rel32(est, 10, 0)
+    hold jnum_eq = here_local(est)
+    est = jcc_rel32(est, 4, 0)
+    conv_jl = push(conv_jl, jnum_eq)
+    est = erel32(est, jp_nan, here_local(est))
+  }
+  est = jmp_rel32(est, top_c - here_local(est) - 5)
+
+  // Bound exhausted without converging: run optional otherwise block
+  est = erel32(est, exh_at, here_local(est))
+  hold zc2 = sw_st(src, st)
+  when mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 {
+    hold zc3 = sw_st(src, st)
+    when at(src, sn, st[0]) != 123 {
+      hold ec8 = fail(1, "converge otherwise needs { ... }")
+    }
+    st[0] = st[0] + 1
+    est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  }
+  hold done_c = here_local(est)
+  est = jl_patch6(est, conv_jl, done_c)
+  est = lp_patch(est, lp_st, my_depth, 0, done_c)
+  give est
+}
+
+make seen_hold_before_em(src: str, limit: num, target: str) -> num {
+  hold i = 0
+  while i < limit {
+    hold c = sx_index(src, i)
+    when c == 34 {
+      i = i + 1
+      while i < limit && sx_index(src, i) != 34 {
+        when sx_index(src, i) == 92 && i + 1 < limit {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      when i < limit {
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < limit && sx_index(src, i + 1) == 47 {
+        while i < limit && sx_index(src, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when id0c(c) == 1 {
+          hold w0 = i
+          while i < limit && idcc(sx_index(src, i)) == 1 {
+            i = i + 1
+          }
+          when string_eq(sub(src, w0, i), "hold") == 1 {
+            while i < limit && (sx_index(src, i) == 32 || sx_index(src, i) == 9) {
+              i = i + 1
+            }
+            when i < limit && id0c(sx_index(src, i)) == 1 {
+              hold n0 = i
+              while i < limit && idcc(sx_index(src, i)) == 1 {
+                i = i + 1
+              }
+              when string_eq(sub(src, n0, i), target) == 1 {
+                give 1
+              }
+            }
+          }
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make list_has_str_em(pool: list, offs: list, nm: str) -> num {
+  hold n = len(offs)
+  hold i = 0
+  while i < n {
+    when pool_eq(pool, offs[i], nm) == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make resolve_outer_trial_var(src: str, st: list, pool: list, nm: str, outer_ng: num, brace_open: num, is_hold_decl: num, out_info: list) -> num {
+  when st[5] >= 0 {
+    hold cfb = f_base(st[5])
+    hold cnp = st[cfb + 1]
+    hold pj = 0
+    while pj < cnp {
+      hold pns = fn_pn_slot(cfb, pj)
+      when pool_eq(pool, st[pns], nm) == 1 {
+        hold pks = fn_pk_slot(cfb, pj)
+        out_info[0] = 1
+        out_info[1] = pj
+        out_info[2] = st[pks]
+        give 1
+      }
+      pj = pj + 1
+    }
+    // Check function locals declared before trial first, then module globals
+    hold lj = outer_ng - 1
+    while lj >= 0 {
+      hold lgb = g_base(lj)
+      when pool_eq(pool, st[lgb], nm) == 1 {
+        out_info[0] = 0
+        out_info[1] = lj
+        out_info[2] = st[lgb + 1]
+        give 1
+      }
+      lj = lj - 1
+    }
+    give 0
+  }
+  hold gi = g_find(st, pool, nm)
+  when gi < 0 || gi >= outer_ng {
+    give 0
+  }
+  when is_hold_decl == 1 {
+    when seen_hold_before_em(src, brace_open, nm) == 0 {
+      give 0
+    }
+  }
+  hold gb = g_base(gi)
+  out_info[0] = 0
+  out_info[1] = gi
+  out_info[2] = st[gb + 1]
+  give 1
+}
+
+make add_trial_mut(muts: list, is_param: num, idx: num, kind: num, nm: str) -> list {
+  when kind == 2 {
+    hold el = fail(1, concat(concat("trial cannot snapshot outer list mutation on '", nm), "' (only num and str outer variables are transactional)"))
+  }
+  when kind == 3 {
+    hold es = fail(1, concat(concat("trial cannot snapshot outer struct mutation on '", nm), "' (only num and str outer variables are transactional)"))
+  }
+  when kind != 0 && kind != 1 {
+    hold eu = fail(1, concat(concat("trial cannot snapshot unresolved outer variable '", nm), "'"))
+  }
+  hold n = len(muts)
+  hold i = 0
+  while i + 2 < n {
+    when muts[i] == is_param && muts[i + 1] == idx {
+      give muts
+    }
+    i = i + 3
+  }
+  muts = push(muts, is_param)
+  muts = push(muts, idx)
+  muts = push(muts, kind)
+  give muts
+}
+
+make scan_trial_muts(src: str, st: list, pool: list, brace_open: num, brace_close: num, outer_ng: num) -> list {
+  hold muts = []
+  hold inner_holds = []
+  hold info = [0, 0, 0]
+  hold p = brace_open + 1
+  hold stmt_head = 1
+  while p < brace_close {
+    hold c = sx_index(src, p)
+    when is_space(c) == 1 {
+      when c == 10 || c == 13 {
+        stmt_head = 1
+      }
+      p = p + 1
+    } otherwise {
+      when c == 47 && p + 1 < brace_close && sx_index(src, p + 1) == 47 {
+        while p < brace_close && sx_index(src, p) != 10 {
+          p = p + 1
+        }
+        stmt_head = 1
+      } otherwise {
+        when c == 34 {
+          p = p + 1
+          while p < brace_close && sx_index(src, p) != 34 {
+            when sx_index(src, p) == 92 && p + 1 < brace_close {
+              p = p + 1
+            }
+            p = p + 1
+          }
+          when p < brace_close {
+            p = p + 1
+          }
+          stmt_head = 0
+        } otherwise {
+          when c == 123 || c == 125 {
+            stmt_head = 1
+            p = p + 1
+          } otherwise {
+            when id0c(c) == 1 {
+              hold w0 = p
+              while p < brace_close && idcc(sx_index(src, p)) == 1 {
+                p = p + 1
+              }
+              hold w = sub(src, w0, p)
+              when stmt_head == 1 && (string_eq(w, "hold") == 1 || string_eq(w, "for") == 1 || string_eq(w, "converge") == 1) {
+                hold is_h = 0
+                when string_eq(w, "hold") == 1 {
+                  is_h = 1
+                }
+                while p < brace_close && (sx_index(src, p) == 32 || sx_index(src, p) == 9) {
+                  p = p + 1
+                }
+                when p < brace_close && id0c(sx_index(src, p)) == 1 {
+                  hold v0 = p
+                  while p < brace_close && idcc(sx_index(src, p)) == 1 {
+                    p = p + 1
+                  }
+                  hold vnm = sub(src, v0, p)
+                  when list_has_str_em(pool, inner_holds, vnm) == 0 {
+                    when resolve_outer_trial_var(src, st, pool, vnm, outer_ng, brace_open, is_h, info) == 1 {
+                      muts = add_trial_mut(muts, info[0], info[1], info[2], vnm)
+                    } otherwise {
+                      inner_holds = push(inner_holds, intern(pool, vnm))
+                    }
+                  }
+                }
+                stmt_head = 0
+              } otherwise {
+                when string_eq(w, "push") == 1 {
+                  hold q = p
+                  while q < brace_close && (sx_index(src, q) == 32 || sx_index(src, q) == 9) {
+                    q = q + 1
+                  }
+                  when q < brace_close && sx_index(src, q) == 40 {
+                    q = q + 1
+                    while q < brace_close && is_space(sx_index(src, q)) == 1 {
+                      q = q + 1
+                    }
+                    when q < brace_close && id0c(sx_index(src, q)) == 1 {
+                      hold a0 = q
+                      while q < brace_close && idcc(sx_index(src, q)) == 1 {
+                        q = q + 1
+                      }
+                      hold anm = sub(src, a0, q)
+                      while q < brace_close && is_space(sx_index(src, q)) == 1 {
+                        q = q + 1
+                      }
+                      when q < brace_close && sx_index(src, q) == 44 {
+                        when list_has_str_em(pool, inner_holds, anm) == 0 {
+                          when resolve_outer_trial_var(src, st, pool, anm, outer_ng, brace_open, 0, info) == 1 {
+                            muts = add_trial_mut(muts, info[0], info[1], info[2], anm)
+                          }
+                        }
+                      }
+                    }
+                  }
+                  stmt_head = 0
+                } otherwise {
+                  when stmt_head == 1 && string_eq(w, "when") == 0 && string_eq(w, "while") == 0 && string_eq(w, "otherwise") == 0 && string_eq(w, "else") == 0 && string_eq(w, "elif") == 0 && string_eq(w, "show") == 0 && string_eq(w, "give") == 0 && string_eq(w, "trial") == 0 && string_eq(w, "rewind") == 0 && string_eq(w, "invariant") == 0 && string_eq(w, "break") == 0 && string_eq(w, "continue") == 0 {
+                    hold q2 = p
+                    while q2 < brace_close && (sx_index(src, q2) == 32 || sx_index(src, q2) == 9) {
+                      q2 = q2 + 1
+                    }
+                    when q2 < brace_close {
+                      hold qc = sx_index(src, q2)
+                      hold is_mut = 0
+                      when qc == 61 && (q2 + 1 >= brace_close || sx_index(src, q2 + 1) != 61) {
+                        is_mut = 1
+                      }
+                      when (qc == 43 || qc == 45) && q2 + 1 < brace_close && sx_index(src, q2 + 1) == 61 {
+                        is_mut = 1
+                      }
+                      when qc == 46 {
+                        hold qf = q2 + 1
+                        while qf < brace_close && idcc(sx_index(src, qf)) == 1 {
+                          qf = qf + 1
+                        }
+                        while qf < brace_close && (sx_index(src, qf) == 32 || sx_index(src, qf) == 9) {
+                          qf = qf + 1
+                        }
+                        when qf < brace_close && sx_index(src, qf) == 61 && (qf + 1 >= brace_close || sx_index(src, qf + 1) != 61) {
+                          is_mut = 1
+                        }
+                      }
+                      when qc == 91 {
+                        hold qb = q2 + 1
+                        hold bd = 1
+                        while qb < brace_close && bd > 0 {
+                          when sx_index(src, qb) == 91 {
+                            bd = bd + 1
+                          }
+                          when sx_index(src, qb) == 93 {
+                            bd = bd - 1
+                          }
+                          qb = qb + 1
+                        }
+                        while qb < brace_close && (sx_index(src, qb) == 32 || sx_index(src, qb) == 9) {
+                          qb = qb + 1
+                        }
+                        when qb < brace_close && sx_index(src, qb) == 61 && (qb + 1 >= brace_close || sx_index(src, qb + 1) != 61) {
+                          is_mut = 1
+                        }
+                      }
+                      when is_mut == 1 && list_has_str_em(pool, inner_holds, w) == 0 {
+                        when resolve_outer_trial_var(src, st, pool, w, outer_ng, brace_open, 0, info) == 1 {
+                          muts = add_trial_mut(muts, info[0], info[1], info[2], w)
+                        }
+                      }
+                    }
+                    stmt_head = 0
+                  } otherwise {
+                    when string_eq(w, "rewind") == 1 || string_eq(w, "break") == 1 || string_eq(w, "continue") == 1 {
+                      stmt_head = 1
+                    } otherwise {
+                      stmt_head = 0
+                    }
+                  }
+                }
+              }
+            } otherwise {
+              stmt_head = 0
+              p = p + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give muts
+}
+
+make emit_trial_st(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num) -> list {
+  hold neg1 = 0 - 1
+  hold sn = st[1]
+  hold z0 = sw_st(src, st)
+  when at(src, sn, st[0]) != 123 {
+    hold et0 = fail(1, "trial needs { ... }")
+  }
+  hold brace_open = st[0]
+  hold brace_close = match_brace_em(src, sn, brace_open)
+  hold outer_ng = st[11]
+  hold muts = scan_trial_muts(src, st, pool, brace_open, brace_close, outer_ng)
+  hold tid = st[35]
+  st[35] = tid + 1
+  hold baks = []
+  hold nm_cnt = len(muts) / 3
+  hold m = 0
+  while m < nm_cnt {
+    hold base_m = m * 3
+    hold is_p = muts[base_m]
+    hold vidx = muts[base_m + 1]
+    hold vk = muts[base_m + 2]
+    hold bgi = for_hidden_em(st, pool, concat("tbak", istr(m)), tid, vk)
+    baks = push(baks, bgi)
+    when is_p == 1 {
+      est = load_param_em(est, vidx)
+    } otherwise {
+      est = load_global_em(est, st, vidx)
+    }
+    est = store_global_em(est, st, bgi)
+    m = m + 1
+  }
+
+  when st[44] >= 64 {
+    hold et1 = fail(1, "trial nesting limit is 64")
+  }
+  hold my_tdepth = st[44]
+  st[44] = my_tdepth + 1
+  st[0] = brace_open + 1
+  est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  st[44] = my_tdepth
+
+  hold ok_jmp = here_local(est)
+  est = jmp_rel32(est, 0)
+
+  // Rollback handler entered on `rewind`
+  est = lp_patch(est, lp_st, my_tdepth, 2, here_local(est))
+  m = 0
+  while m < nm_cnt {
+    hold base_m2 = m * 3
+    hold is_p2 = muts[base_m2]
+    hold vidx2 = muts[base_m2 + 1]
+    hold bgi2 = baks[m]
+    est = load_global_em(est, st, bgi2)
+    when is_p2 == 1 {
+      hold pdisp = 0 - 8 * (vidx2 + 1)
+      est = mv_m64(est, 5, neg1, 0, pdisp, 0)
+    } otherwise {
+      est = store_global_em(est, st, vidx2)
+    }
+    m = m + 1
+  }
+
+  hold z2 = sw_st(src, st)
+  when mkw_st(src, st, "otherwise") == 1 || mkw_st(src, st, "else") == 1 {
+    hold z3 = sw_st(src, st)
+    when at(src, sn, st[0]) != 123 {
+      hold et2 = fail(1, "trial otherwise needs { ... }")
+    }
+    st[0] = st[0] + 1
+    est = emit_prog(src, st, pool, est, data, lp_st, in_fn, 1)
+  }
+  est = erel32j(est, ok_jmp, here_local(est))
+  give est
+}
+
 make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: list, in_fn: num, stop: num) -> list {
   hold neg1 = 0 - 1
   hold sn = st[1]
@@ -2520,6 +3253,18 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
     when c == 47 && at(src, sn, st[0] + 1) == 47 {
       hold ec = eol_st(src, st)
     } otherwise {
+      when st[45] == 1 {
+        hold lm_p0 = st[0]
+        hold lm_skip = 0
+        when mkw_st(src, st, "make") == 1 || mkw_st(src, st, "struct") == 1 {
+          lm_skip = 1
+        }
+        st[0] = lm_p0
+        when lm_skip == 0 {
+          hold stmt_ln = line_at_em(src, st, lm_p0)
+          lp_st = lp_record(lp_st, here_global(est), 9, stmt_ln)
+        }
+      }
       est = callb(est, 28)
       hold line = st[0]
       hold z1 = sw_st(src, st)
@@ -2667,6 +3412,36 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
       when done == 0 && mkw_st(src, st, "for") == 1 {
         done = 1
         est = emit_for(src, st, pool, est, data, lp_st, in_fn)
+      }
+
+      // trial
+      when done == 0 && mkw_st(src, st, "trial") == 1 {
+        done = 1
+        est = emit_trial_st(src, st, pool, est, data, lp_st, in_fn)
+      }
+
+      // rewind
+      when done == 0 && mkw_st(src, st, "rewind") == 1 {
+        done = 1
+        when st[44] == 0 {
+          hold erw = fail(1, "rewind outside a trial block")
+        }
+        hold rw_at = here_local(est)
+        est = jmp_rel32(est, 0)
+        lp_st = lp_record(lp_st, st[44] - 1, 2, rw_at)
+        hold es_rw = endstmt_st(src, st)
+      }
+
+      // converge
+      when done == 0 && mkw_st(src, st, "converge") == 1 {
+        done = 1
+        est = emit_converge_st(src, st, pool, est, data, lp_st, in_fn)
+      }
+
+      // invariant
+      when done == 0 && mkw_st(src, st, "invariant") == 1 {
+        done = 1
+        est = emit_invariant_st(src, st, pool, est, data, lp_st, in_fn)
       }
 
       // break

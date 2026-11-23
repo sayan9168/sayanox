@@ -666,3 +666,54 @@ Generated C requires C11 (`_Generic` scalar dispatch); each hole identifier is
 evaluated once. `make test-string-interpolation` pins gen2/gen3 values, scope,
 escaping, imports, GC retention and refusals at O0/O2. Seed/native interpolation
 and arbitrary expression/format-specifier holes remain unsupported.
+
+### Value pipelines, lexical transactions, fixed-point loops, and self-healing invariants
+
+Sayanox provides four original control and dataflow constructs verified across
+C-output (`--seed-profile`, `gen2`/`gen3`), native x86-64 (`native_aot`,
+`sxc_native`), multi-ISA native (`native32` `i386`, `arm64`, `riscv64`), and the
+portable IR VM (`sxirexec`):
+
+```sayanox
+// 1. Left-associative value pipeline (`|>` with optional `_` hole)
+hold y = 4 |> scale(3, 2) |> scale(10, _, 5)
+
+// 2. Lexical state transaction (`trial` / `rewind` / `otherwise`)
+trial {
+  balance = balance - cost
+  when balance < 0 {
+    rewind
+  }
+} otherwise {
+  audit = "reverted"
+}
+
+// 3. Bounded fixed-point loop (`converge VAR within BOUND`)
+converge estimate within 16 {
+  estimate = refine(estimate)
+} otherwise {
+  estimate = fallback
+}
+
+// 4. Self-healing runtime contract (`invariant COND [otherwise { ... }]`)
+invariant reserve >= 0 otherwise {
+  reserve = 0
+}
+```
+
+* **`EXPR |> CALLEE(ARGS...)`**: evaluates `EXPR` once before `ARGS...`, binds
+  standalone `_` placeholders inside that call's top-level argument list (or
+  prepends as argument 0 when `_` is absent), and chains left-to-right.
+* **`trial { ... } [otherwise { ... }]` + `rewind`**: snapshots mutated outer
+  `num` and `str` bindings at block entry, restores them atomically on `rewind`,
+  and runs the optional `otherwise` block only when `rewind` fires. Mutating
+  outer `list` or `struct` bindings inside `trial` is a compile-time error.
+* **`converge VAR within BOUND { ... } [otherwise { ... }]`**: evaluates `BOUND`
+  once, stops early as soon as an iteration leaves `VAR` equal to its start-of-step
+  value, and runs `otherwise` only if `BOUND` iterations complete without
+  reaching a fixed point. `within` is contextual to `converge` headers.
+* **`invariant COND [otherwise { ... }]`**: checks `COND`; if falsy and an
+  `otherwise` repair block is present, executes the repair and re-evaluates
+  `COND`, exiting 1 with `sx: invariant repair failed` if still falsy (or
+  `sx: invariant failed` without an `otherwise` block).
+

@@ -4892,6 +4892,11 @@ make emit_statements() -> num {
   bdepth = 0
   ops = []
   stmts = 0
+  hold tag_tr_on = concat(chr(125), concat(" __n32_on_rewind ", chr(123)))
+  hold tr_stk = []
+  hold tr_top = 0
+  hold rw_sites = []
+  hold rw_cnt = 0
 
   while pos <= n {
     // one line, without its newline
@@ -4922,6 +4927,26 @@ make emit_statements() -> num {
       }
       when act == 0 && (string_eq(line, tag_other) == 1 || string_eq(line, tag_other2) == 1) {
         act = 6
+      }
+      when act == 0 && starts(line, "__n32_fail ") == 1 {
+        lit = sub(line, 11, len(line))
+        act = 20
+      }
+      when act == 0 && string_eq(line, concat("__n32_trial ", chr(123))) == 1 {
+        act = 21
+      }
+      when act == 0 && string_eq(line, "__n32_rewind") == 1 {
+        act = 22
+      }
+      when act == 0 && string_eq(line, tag_tr_on) == 1 {
+        act = 23
+      }
+      when act == 0 && starts(line, "__n32_chkscalar ") == 1 {
+        hold chk_v = trim(sub(line, 16, len(line)))
+        when slot_of(listnames, chk_v) > 0 || slot_of(listnames, concat("$", chk_v)) >= 0 {
+          hold bad_tr_mut = fail(1, concat(concat("line ", numstr(lineno)), ": trial cannot snapshot outer list or struct mutation"))
+        }
+        act = 19
       }
       when act == 0 && starts(line, "hold ") == 1 {
         hold rest = trim(sub(line, 5, len(line)))
@@ -5221,6 +5246,23 @@ make emit_statements() -> num {
           hold badwhen = fail(1, concat(concat("line ", numstr(lineno)), ": a `when` must end with `{` on the same line"))
         }
         extext = trim(sub(line, 5, len(line) - 1))
+        when starts(extext, "__n32_veq:") == 1 {
+          hold veq_rest = sub(extext, 10, len(extext))
+          hold veq_sep = find_byte(veq_rest, 58)
+          hold veq_v = sub(veq_rest, 0, veq_sep)
+          hold veq_p = sub(veq_rest, veq_sep + 1, len(veq_rest))
+          when slot_of(names, veq_v) < 0 {
+            hold bad_cv_undef = fail(1, concat(concat("line ", numstr(lineno)), concat(": converge needs an existing variable '", concat(veq_v, "'"))))
+          }
+          when slot_of(listnames, veq_v) > 0 || slot_of(listnames, concat("$", veq_v)) >= 0 {
+            hold bad_cv_kind = fail(1, concat(concat("line ", numstr(lineno)), ": converge target must be a number or string"))
+          }
+          when slot_of(strnames, veq_v) >= 0 {
+            extext = concat("string_eq(", concat(veq_v, concat(", ", concat(veq_p, ")"))))
+          } otherwise {
+            extext = concat(veq_v, concat(" == ", veq_p))
+          }
+        }
         act = 7
       }
       when act == 0 && starts(line, "while ") == 1 {
@@ -5578,6 +5620,103 @@ make emit_statements() -> num {
         hold concat_shown = emit_show_string_slot(concatdest)
       }
     }
+    when act == 20 {
+      hold flitoff = len(data)
+      data = append_text(data, lit)
+      data = push(data, 10)
+      hold flbytes = len(data) - flitoff
+      when arch == 0 {
+        code = e1(code, 184)
+        code = e32(code, 4)
+        code = e1(code, 187)
+        code = e32(code, 2)
+        code = e1(code, 185)
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, flitoff)
+        code = e32(code, 0)
+        code = e1(code, 186)
+        code = e32(code, flbytes)
+        code = e1(code, 205)
+        code = e1(code, 128)
+        code = e1(code, 184)
+        code = e32(code, 1)
+        code = e1(code, 187)
+        code = e32(code, 1)
+        code = e1(code, 205)
+        code = e1(code, 128)
+      } otherwise {
+        fixsite = push(fixsite, len(code))
+        fixoff = push(fixoff, flitoff)
+        when arch == 2 {
+          code = rv_li32(code, 11, 0)
+          code = rv_li32(code, 12, flbytes)
+          code = e_w(code, rv_i(2, 0, 0, 10, 19))
+          code = e_w(code, rv_i(64, 0, 0, 17, 19))
+          code = e_w(code, 115)
+          code = e_w(code, rv_i(1, 0, 0, 10, 19))
+          code = e_w(code, rv_i(93, 0, 0, 17, 19))
+          code = e_w(code, 115)
+        } otherwise {
+          code = a_addr(code, 1)
+          code = a_movz(code, 0, 2, flbytes)
+          code = a_movz(code, 1, 0, 2)
+          code = a_movz(code, 1, 8, 64)
+          code = e_w(code, 3556769793)
+          code = a_movz(code, 1, 0, 1)
+          code = a_movz(code, 1, 8, 93)
+          code = e_w(code, 3556769793)
+        }
+      }
+    }
+    when act == 21 {
+      when tr_top < len(tr_stk) {
+        tr_stk[tr_top] = rw_cnt
+      } otherwise {
+        tr_stk = push(tr_stk, rw_cnt)
+      }
+      tr_top = tr_top + 1
+      when bdepth < len(bkind) {
+        bkind[bdepth] = 21
+        bsite[bdepth] = 0
+        bstart[bdepth] = 0
+      } otherwise {
+        bkind = push(bkind, 21)
+        bsite = push(bsite, 0)
+        bstart = push(bstart, 0)
+      }
+      bdepth = bdepth + 1
+    }
+    when act == 22 {
+      when tr_top <= 0 {
+        hold bad_rw_out = fail(1, concat(concat("line ", numstr(lineno)), ": rewind outside a trial block"))
+      }
+      code = emit_jmp(code, arch)
+      hold rws = len(code) - 4
+      when rw_cnt < len(rw_sites) {
+        rw_sites[rw_cnt] = rws
+      } otherwise {
+        rw_sites = push(rw_sites, rws)
+      }
+      rw_cnt = rw_cnt + 1
+    }
+    when act == 23 {
+      when bdepth == 0 || bkind[bdepth - 1] != 21 || tr_top <= 0 {
+        hold bad_tr_on = fail(1, concat(concat("line ", numstr(lineno)), ": internal trial rollback mismatch"))
+      }
+      tr_top = tr_top - 1
+      hold rw_base = tr_stk[tr_top]
+      code = emit_jmp(code, arch)
+      hold ok_jsite = len(code) - 4
+      hold rb_target = len(code)
+      hold rwi = rw_base
+      while rwi < rw_cnt {
+        code = patch_jmp(code, arch, rw_sites[rwi], rb_target)
+        rwi = rwi + 1
+      }
+      rw_cnt = rw_base
+      bkind[bdepth - 1] = 9
+      bsite[bdepth - 1] = ok_jsite
+    }
     when act == 7 || act == 8 {
       code = emit_test_jz(code, arch)
       hold site = len(code) - 4
@@ -5629,6 +5768,1121 @@ make emit_statements() -> num {
   give 0
 }
 
+// ---- Sayanox-original construct lowering for i386 / arm64 / riscv64 ----
+
+make n32_id0(c: num) -> num {
+  give (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+}
+
+make n32_ws(c: num) -> num {
+  give c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12
+}
+
+make n32_has_adv(text: str) -> num {
+  hold n = len(text)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(text, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(text, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when c == 124 && i + 1 < n && sx_index(text, i + 1) == 62 {
+          give 1
+        }
+        when n32_id0(c) == 1 {
+          hold w0 = i
+          while i < n && is_name_char(sx_index(text, i)) == 1 {
+            i = i + 1
+          }
+          hold w = sub(text, w0, i)
+          when string_eq(w, "_") == 1 || string_eq(w, "trial") == 1 || string_eq(w, "rewind") == 1 || string_eq(w, "converge") == 1 || string_eq(w, "invariant") == 1 {
+            give 1
+          }
+        } otherwise {
+          i = i + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make n32_skip_ws(s: str, pos: num, lim: num) -> num {
+  hold i = pos
+  hold go = 1
+  while i < lim && go == 1 {
+    while i < lim && n32_ws(sx_index(s, i)) == 1 {
+      i = i + 1
+    }
+    when i + 1 < lim && sx_index(s, i) == 47 && sx_index(s, i + 1) == 47 {
+      while i < lim && sx_index(s, i) != 10 {
+        i = i + 1
+      }
+    } otherwise {
+      go = 0
+    }
+  }
+  give i
+}
+
+make n32_close(s: str, open: num, och: num, cch: num) -> num {
+  hold n = len(s)
+  hold i = open + 1
+  hold d = 1
+  while i < n && d > 0 {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(s, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(s, i + 1) == 47 {
+        while i < n && sx_index(s, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when c == och {
+          d = d + 1
+        }
+        when c == cch {
+          d = d - 1
+          when d == 0 {
+            give i
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+  give 0 - 1
+}
+
+make n32_cond_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold d = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        while i < lim && sx_index(s, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when d == 0 && c == 123 {
+          give i
+        }
+        when c == 40 || c == 91 {
+          d = d + 1
+        }
+        when c == 41 || c == 93 {
+          when d > 0 {
+            d = d - 1
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+  give lim
+}
+
+make n32_inv_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold d = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        give i
+      } otherwise {
+        when d == 0 && (c == 10 || c == 13 || c == 123 || c == 125) {
+          give i
+        }
+        when c == 40 || c == 91 {
+          d = d + 1
+        }
+        when c == 41 || c == 93 {
+          when d > 0 {
+            d = d - 1
+          }
+        }
+        when d == 0 && n32_id0(c) == 1 {
+          hold ok = 1
+          when i > from && is_name_char(sx_index(s, i - 1)) == 1 {
+            ok = 0
+          }
+          when ok == 1 {
+            hold we = i
+            while we < lim && is_name_char(sx_index(s, we)) == 1 {
+              we = we + 1
+            }
+            hold kw = sub(s, i, we)
+            when string_eq(kw, "otherwise") == 1 || string_eq(kw, "else") == 1 {
+              give i
+            }
+            i = we - 1
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+  give lim
+}
+
+make n32_stmt_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold d = 0
+  hold last_sig = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+      last_sig = 34
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        while i < lim && sx_index(s, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when d == 0 && c == 125 {
+          give i
+        }
+        when d == 0 && (c == 10 || c == 13) {
+          hold cont = 0
+          when last_sig == 61 || last_sig == 44 || last_sig == 620 {
+            cont = 1
+          }
+          when cont == 0 {
+            hold nx = n32_skip_ws(s, i + 1, lim)
+            when nx + 1 < lim && sx_index(s, nx) == 124 && sx_index(s, nx + 1) == 62 {
+              cont = 1
+            }
+          }
+          when cont == 0 {
+            give i
+          }
+          i = i + 1
+        } otherwise {
+          when c == 40 || c == 91 || c == 123 {
+            d = d + 1
+            last_sig = c
+            i = i + 1
+          } otherwise {
+            when c == 41 || c == 93 || c == 125 {
+              when d > 0 {
+                d = d - 1
+              }
+              last_sig = c
+              i = i + 1
+            } otherwise {
+              when c == 124 && i + 1 < lim && sx_index(s, i + 1) == 62 {
+                last_sig = 620
+                i = i + 2
+              } otherwise {
+                when n32_ws(c) == 0 {
+                  last_sig = c
+                }
+                i = i + 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give lim
+}
+
+make n32_pair(a: str, b: str) -> str {
+  give concat(a, concat(chr(1), b))
+}
+
+make n32_fst(p: str) -> str {
+  hold idx = find_byte(p, 1)
+  when idx < 0 {
+    give ""
+  }
+  give sub(p, 0, idx)
+}
+
+make n32_snd(p: str) -> str {
+  hold idx = find_byte(p, 1)
+  when idx < 0 {
+    give p
+  }
+  give sub(p, idx + 1, len(p))
+}
+
+make n32_csv_has(csv: str, nm: str) -> num {
+  when len(nm) == 0 || len(csv) == 0 {
+    give 0
+  }
+  hold wrapped = concat(",", concat(csv, ","))
+  hold needle = concat(",", concat(nm, ","))
+  hold wn = len(wrapped)
+  hold nn = len(needle)
+  hold i = 0
+  while i + nn <= wn {
+    when string_eq(sub(wrapped, i, i + nn), needle) == 1 {
+      give 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+make n32_csv_add(csv: str, nm: str) -> str {
+  when len(nm) == 0 || n32_csv_has(csv, nm) == 1 {
+    give csv
+  }
+  when len(csv) == 0 {
+    give nm
+  }
+  give concat(csv, concat(",", nm))
+}
+
+make n32_has_hole(raw: str) -> num {
+  hold n = len(raw)
+  hold i = 0
+  hold d = 0
+  while i < n {
+    hold c = sx_index(raw, i)
+    when c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(raw, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(raw, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 40 || c == 91 || c == 123 {
+        d = d + 1
+        i = i + 1
+      } otherwise {
+        when c == 41 || c == 93 || c == 125 {
+          when d > 0 {
+            d = d - 1
+          }
+          i = i + 1
+        } otherwise {
+          when d == 0 && c == 95 {
+            hold pid = 0
+            when i > 0 && is_name_char(sx_index(raw, i - 1)) == 1 {
+              pid = 1
+            }
+            hold nid = 0
+            when i + 1 < n && is_name_char(sx_index(raw, i + 1)) == 1 {
+              nid = 1
+            }
+            when pid == 0 && nid == 0 {
+              give 1
+            }
+          }
+          i = i + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make n32_uid(tag: str, ctr: list) -> str {
+  hold v = ctr[0]
+  ctr[0] = v + 1
+  give concat("__n32", concat(tag, numstr(v)))
+}
+
+make n32_args(raw: str, ctr: list, hole: str) -> str {
+  hold tr = trim(raw)
+  when len(tr) == 0 {
+    give n32_pair("", "")
+  }
+  hold n = len(raw)
+  hold pre = ""
+  hold out = ""
+  hold s0 = 0
+  hold d = 0
+  hold i = 0
+  hold first = 1
+  while i <= n {
+    hold c = 44
+    when i < n {
+      c = sx_index(raw, i)
+    }
+    when i < n && c == 34 {
+      i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(raw, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(raw, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+    } otherwise {
+      when i < n && (c == 40 || c == 91 || c == 123) {
+        d = d + 1
+        i = i + 1
+      } otherwise {
+        when i < n && (c == 41 || c == 93 || c == 125) {
+          when d > 0 {
+            d = d - 1
+          }
+          i = i + 1
+        } otherwise {
+          when d == 0 && c == 44 {
+            hold rp = n32_expr(trim(sub(raw, s0, i)), ctr, hole)
+            pre = concat(pre, n32_fst(rp))
+            when first == 0 {
+              out = concat(out, ", ")
+            }
+            out = concat(out, n32_snd(rp))
+            first = 0
+            s0 = i + 1
+            i = i + 1
+          } otherwise {
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give n32_pair(pre, out)
+}
+
+make n32_expr(expr: str, ctr: list, hole: str) -> str {
+  hold n = len(expr)
+  hold pre = ""
+  hold cur = ""
+  hold add_s = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(expr, i)
+    when c == 34 {
+      hold q0 = i
+      i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(expr, i) == 92 {
+          i = i + 2
+        } otherwise {
+          when sx_index(expr, i) == 34 {
+            q = 0
+          }
+          i = i + 1
+        }
+      }
+      cur = concat(cur, sub(expr, q0, i))
+    } otherwise {
+      when c == 40 {
+        hold cp = n32_close(expr, i, 40, 41)
+        when cp < 0 {
+          hold badp = fail(1, "unclosed '(' in expression")
+        }
+        hold ip = n32_expr(sub(expr, i + 1, cp), ctr, hole)
+        pre = concat(pre, n32_fst(ip))
+        cur = concat(cur, concat("(", concat(n32_snd(ip), ")")))
+        i = cp + 1
+      } otherwise {
+        when c == 91 {
+          hold cb = n32_close(expr, i, 91, 93)
+          when cb < 0 {
+            hold badb = fail(1, "unclosed '[' in expression")
+          }
+          hold ib = n32_args(sub(expr, i + 1, cb), ctr, hole)
+          pre = concat(pre, n32_fst(ib))
+          cur = concat(cur, concat("[", concat(n32_snd(ib), "]")))
+          i = cb + 1
+        } otherwise {
+          when c == 124 && i + 1 < n && sx_index(expr, i + 1) == 62 {
+            hold lhs = trim(sub(cur, add_s, len(cur)))
+            when len(lhs) == 0 {
+              hold badlhs = fail(1, "missing input expression before '|>'")
+            }
+            hold ptmp = n32_uid("_p", ctr)
+            pre = concat(pre, concat("hold ", concat(ptmp, concat(" = ", concat(lhs, "\n")))))
+            hold p = n32_skip_ws(expr, i + 2, n)
+            when p >= n || n32_id0(sx_index(expr, p)) == 0 {
+              hold badrhs = fail(1, "|> right-hand side must be a function call: expr |> fn(...)")
+            }
+            hold cs = p
+            while p < n && is_name_char(sx_index(expr, p)) == 1 {
+              p = p + 1
+            }
+            while p < n && (sx_index(expr, p) == 32 || sx_index(expr, p) == 9) {
+              p = p + 1
+            }
+            when p >= n || sx_index(expr, p) != 40 {
+              hold badcall = fail(1, "|> right-hand side must be a function call: expr |> fn(...)")
+            }
+            hold cc = n32_close(expr, p, 40, 41)
+            when cc < 0 {
+              hold badcc = fail(1, "unclosed '(' in '|>' call")
+            }
+            hold hd = sub(expr, cs, p)
+            hold rca = sub(expr, p + 1, cc)
+            hold eca = rca
+            when n32_has_hole(rca) == 0 {
+              when len(trim(rca)) == 0 {
+                eca = "_"
+              } otherwise {
+                eca = concat("_, ", trim(rca))
+              }
+            }
+            hold ra = n32_args(eca, ctr, ptmp)
+            pre = concat(pre, n32_fst(ra))
+            cur = concat(sub(cur, 0, add_s), concat(hd, concat("(", concat(n32_snd(ra), ")"))))
+            i = cc + 1
+          } otherwise {
+            when n32_id0(c) == 1 {
+              hold w0 = i
+              while i < n && is_name_char(sx_index(expr, i)) == 1 {
+                i = i + 1
+              }
+              hold w = sub(expr, w0, i)
+              hold pdot = 0
+              when w0 > 0 && sx_index(expr, w0 - 1) == 46 {
+                pdot = 1
+              }
+              when pdot == 0 && string_eq(w, "_") == 1 {
+                when len(hole) == 0 {
+                  hold badhole = fail(1, "placeholder '_' is only valid inside a '|>' pipeline call")
+                }
+                cur = concat(cur, hole)
+              } otherwise {
+                hold p2 = i
+                while p2 < n && (sx_index(expr, p2) == 32 || sx_index(expr, p2) == 9) {
+                  p2 = p2 + 1
+                }
+                when p2 < n && sx_index(expr, p2) == 40 {
+                  hold cc2 = n32_close(expr, p2, 40, 41)
+                  when cc2 < 0 {
+                    hold badc2 = fail(1, "unclosed '(' in call")
+                  }
+                  hold sa = n32_args(sub(expr, p2 + 1, cc2), ctr, "")
+                  pre = concat(pre, n32_fst(sa))
+                  cur = concat(cur, concat(w, concat("(", concat(n32_snd(sa), ")"))))
+                  i = cc2 + 1
+                } otherwise {
+                  cur = concat(cur, w)
+                }
+              }
+            } otherwise {
+              when (c == 61 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 33 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 60 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 62 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 38 && i + 1 < n && sx_index(expr, i + 1) == 38) || (c == 124 && i + 1 < n && sx_index(expr, i + 1) == 124) {
+                cur = concat(cur, sub(expr, i, i + 2))
+                add_s = len(cur)
+                i = i + 2
+              } otherwise {
+                when c == 60 || c == 62 || c == 44 {
+                  cur = concat(cur, chr(c))
+                  add_s = len(cur)
+                  i = i + 1
+                } otherwise {
+                  when c == 10 || c == 13 {
+                    cur = concat(cur, " ")
+                    i = i + 1
+                  } otherwise {
+                    cur = concat(cur, chr(c))
+                    i = i + 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give n32_pair(pre, cur)
+}
+
+make n32_scan_muts(body: str, known: str) -> str {
+  hold muts = ""
+  hold inner = ""
+  hold n = len(body)
+  hold p = 0
+  hold head = 1
+  while p < n {
+    hold c = sx_index(body, p)
+    when n32_ws(c) == 1 {
+      when c == 10 || c == 13 {
+        head = 1
+      }
+      p = p + 1
+    } otherwise {
+      when c == 47 && p + 1 < n && sx_index(body, p + 1) == 47 {
+        while p < n && sx_index(body, p) != 10 {
+          p = p + 1
+        }
+        head = 1
+      } otherwise {
+        when c == 34 {
+          p = p + 1
+          hold q = 1
+          while p < n && q == 1 {
+            when sx_index(body, p) == 92 {
+              p = p + 2
+            } otherwise {
+              when sx_index(body, p) == 34 {
+                q = 0
+              }
+              p = p + 1
+            }
+          }
+          head = 0
+        } otherwise {
+          when c == 123 || c == 125 {
+            head = 1
+            p = p + 1
+          } otherwise {
+            when n32_id0(c) == 1 {
+              hold w0 = p
+              while p < n && is_name_char(sx_index(body, p)) == 1 {
+                p = p + 1
+              }
+              hold w = sub(body, w0, p)
+              when head == 1 && string_eq(w, "hold") == 1 {
+                while p < n && (sx_index(body, p) == 32 || sx_index(body, p) == 9) {
+                  p = p + 1
+                }
+                when p < n && n32_id0(sx_index(body, p)) == 1 {
+                  hold v0 = p
+                  while p < n && is_name_char(sx_index(body, p)) == 1 {
+                    p = p + 1
+                  }
+                  hold vn = sub(body, v0, p)
+                  when n32_csv_has(inner, vn) == 0 {
+                    when n32_csv_has(known, vn) == 1 {
+                      muts = n32_csv_add(muts, vn)
+                    } otherwise {
+                      inner = n32_csv_add(inner, vn)
+                    }
+                  }
+                }
+                head = 0
+              } otherwise {
+                when string_eq(w, "push") == 1 {
+                  hold q2 = n32_skip_ws(body, p, n)
+                  when q2 < n && sx_index(body, q2) == 40 {
+                    q2 = n32_skip_ws(body, q2 + 1, n)
+                    when q2 < n && n32_id0(sx_index(body, q2)) == 1 {
+                      hold a0 = q2
+                      while q2 < n && is_name_char(sx_index(body, q2)) == 1 {
+                        q2 = q2 + 1
+                      }
+                      hold anm = sub(body, a0, q2)
+                      when n32_csv_has(inner, anm) == 0 && n32_csv_has(known, anm) == 1 {
+                        hold badpl = fail(1, "trial cannot snapshot outer list mutation")
+                      }
+                    }
+                  }
+                  head = 0
+                } otherwise {
+                  when head == 1 && string_eq(w, "when") == 0 && string_eq(w, "while") == 0 && string_eq(w, "otherwise") == 0 && string_eq(w, "else") == 0 && string_eq(w, "show") == 0 && string_eq(w, "give") == 0 && string_eq(w, "trial") == 0 && string_eq(w, "rewind") == 0 && string_eq(w, "converge") == 0 && string_eq(w, "invariant") == 0 {
+                    hold q3 = p
+                    while q3 < n && (sx_index(body, q3) == 32 || sx_index(body, q3) == 9) {
+                      q3 = q3 + 1
+                    }
+                    when q3 < n {
+                      hold qc = sx_index(body, q3)
+                      when qc == 61 && (q3 + 1 >= n || sx_index(body, q3 + 1) != 61) {
+                        when n32_csv_has(inner, w) == 0 && n32_csv_has(known, w) == 1 {
+                          muts = n32_csv_add(muts, w)
+                        }
+                      }
+                      when qc == 46 || qc == 91 {
+                        when n32_csv_has(inner, w) == 0 && n32_csv_has(known, w) == 1 {
+                          hold badsf = fail(1, "trial cannot snapshot outer list or struct mutation")
+                        }
+                      }
+                    }
+                    head = 0
+                  } otherwise {
+                    when string_eq(w, "rewind") == 1 {
+                      head = 1
+                    } otherwise {
+                      head = 0
+                    }
+                  }
+                }
+              }
+            } otherwise {
+              head = 0
+              p = p + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give muts
+}
+
+make n32_do_inv(src: str, we: num, b1: num, ctr: list, known: str, in_tr: num) -> str {
+  hold lb = chr(123)
+  hold rb = chr(125)
+  hold oth_ln = concat(rb, concat(" otherwise ", concat(lb, "\n")))
+  hold ie = n32_inv_end(src, we, b1)
+  hold ic = trim(sub(src, we, ie))
+  when len(ic) == 0 {
+    hold badi0 = fail(1, "invariant needs a condition")
+  }
+  hold ip1 = n32_expr(ic, ctr, "")
+  hold nx = n32_skip_ws(src, ie, b1)
+  when nx < b1 && sx_index(src, nx) == 123 {
+    hold badi1 = fail(1, "invariant takes an optional 'otherwise { ... }' block, not a bare '{ ... }'")
+  }
+  when nx < b1 && n32_id0(sx_index(src, nx)) == 1 {
+    hold iwe = nx
+    while iwe < b1 && is_name_char(sx_index(src, iwe)) == 1 {
+      iwe = iwe + 1
+    }
+    hold iw = sub(src, nx, iwe)
+    when string_eq(iw, "otherwise") == 1 || string_eq(iw, "else") == 1 {
+      hold boi = n32_skip_ws(src, iwe, b1)
+      when boi >= b1 || sx_index(src, boi) != 123 {
+        hold badi2 = fail(1, "invariant otherwise needs { ... }")
+      }
+      hold bci = n32_close(src, boi, 123, 125)
+      when bci < 0 || bci >= b1 {
+        hold badi3 = fail(1, "unclosed '{' in invariant otherwise")
+      }
+      hold rep = n32_block(src, boi + 1, bci, ctr, known, in_tr)
+      hold ip2 = n32_expr(ic, ctr, "")
+      hold chk2 = concat(n32_fst(ip2), concat("when ", concat(n32_snd(ip2), concat(" ", concat(lb, concat("\n", concat(oth_ln, concat("__n32_fail sx: invariant repair failed\n", concat(rb, "\n")))))))))
+      hold out2 = concat(n32_fst(ip1), concat("when ", concat(n32_snd(ip1), concat(" ", concat(lb, concat("\n", concat(oth_ln, concat(rep, concat(chk2, concat(rb, "\n"))))))))))
+      give n32_pair(numstr(bci + 1), out2)
+    }
+  }
+  hold out1 = concat(n32_fst(ip1), concat("when ", concat(n32_snd(ip1), concat(" ", concat(lb, concat("\n", concat(oth_ln, concat("__n32_fail sx: invariant failed\n", concat(rb, "\n")))))))))
+  give n32_pair(numstr(ie), out1)
+}
+
+make n32_do_conv(src: str, we: num, b1: num, ctr: list, known: str, in_tr: num) -> str {
+  hold lb = chr(123)
+  hold rb = chr(125)
+  hold vp = n32_skip_ws(src, we, b1)
+  hold ve = vp
+  while ve < b1 && is_name_char(sx_index(src, ve)) == 1 {
+    ve = ve + 1
+  }
+  hold cvar = sub(src, vp, ve)
+  hold wp = n32_skip_ws(src, ve, b1)
+  hold wend = wp
+  while wend < b1 && is_name_char(sx_index(src, wend)) == 1 {
+    wend = wend + 1
+  }
+  when len(cvar) == 0 || string_eq(sub(src, wp, wend), "within") == 0 {
+    hold badc0 = fail(1, "converge syntax: converge VAR within BOUND { ... }")
+  }
+  hold bec = n32_cond_end(src, wend, b1)
+  hold bpc = n32_expr(trim(sub(src, wend, bec)), ctr, "")
+  hold boc = n32_skip_ws(src, bec, b1)
+  when boc >= b1 || sx_index(src, boc) != 123 {
+    hold badc1 = fail(1, "converge needs { ... }")
+  }
+  hold bcc = n32_close(src, boc, 123, 125)
+  when bcc < 0 || bcc >= b1 {
+    hold badc2 = fail(1, "unclosed '{' in converge")
+  }
+  hold crem = n32_uid("_rem", ctr)
+  hold cflg = n32_uid("_cv", ctr)
+  hold cprv = n32_uid("_prv", ctr)
+  hold cbody = n32_block(src, boc + 1, bcc, ctr, known, in_tr)
+  hold out = n32_fst(bpc)
+  out = concat(out, concat("hold ", concat(crem, concat(" = ", concat(n32_snd(bpc), "\n")))))
+  out = concat(out, concat("hold ", concat(cflg, " = 0\n")))
+  out = concat(out, concat("while ", concat(crem, concat(" > 0 ", concat(lb, "\n")))))
+  out = concat(out, concat(crem, concat(" = ", concat(crem, " - 1\n"))))
+  out = concat(out, concat("hold ", concat(cprv, concat(" = ", concat(cvar, "\n")))))
+  out = concat(out, cbody)
+  out = concat(out, concat("when __n32_veq:", concat(cvar, concat(":", concat(cprv, concat(" ", concat(lb, "\n")))))))
+  out = concat(out, concat(cflg, concat(" = 1\n", concat(crem, concat(" = 0\n", concat(rb, concat("\n", concat(rb, "\n"))))))))
+  hold cp = bcc + 1
+  hold nxc = n32_skip_ws(src, cp, b1)
+  when nxc < b1 && n32_id0(sx_index(src, nxc)) == 1 {
+    hold cwe = nxc
+    while cwe < b1 && is_name_char(sx_index(src, cwe)) == 1 {
+      cwe = cwe + 1
+    }
+    hold cw = sub(src, nxc, cwe)
+    when string_eq(cw, "otherwise") == 1 || string_eq(cw, "else") == 1 {
+      hold cbo2 = n32_skip_ws(src, cwe, b1)
+      when cbo2 >= b1 || sx_index(src, cbo2) != 123 {
+        hold badc3 = fail(1, "converge otherwise needs { ... }")
+      }
+      hold cbc2 = n32_close(src, cbo2, 123, 125)
+      when cbc2 < 0 || cbc2 >= b1 {
+        hold badc4 = fail(1, "unclosed '{' in converge otherwise")
+      }
+      hold ob = n32_block(src, cbo2 + 1, cbc2, ctr, known, in_tr)
+      out = concat(out, concat("when ", concat(cflg, concat(" == 0 ", concat(lb, concat("\n", concat(ob, concat(rb, "\n"))))))))
+      cp = cbc2 + 1
+    }
+  }
+  give n32_pair(numstr(cp), out)
+}
+
+make n32_do_trial(src: str, we: num, b1: num, ctr: list, known: str, in_tr: num) -> str {
+  hold lb = chr(123)
+  hold rb = chr(125)
+  hold bot = n32_skip_ws(src, we, b1)
+  when bot >= b1 || sx_index(src, bot) != 123 {
+    hold badt0 = fail(1, "trial needs { ... }")
+  }
+  hold bct = n32_close(src, bot, 123, 125)
+  when bct < 0 || bct >= b1 {
+    hold badt1 = fail(1, "unclosed '{' in trial")
+  }
+  hold muts = n32_scan_muts(sub(src, bot + 1, bct), known)
+  hold bsave = ""
+  hold brest = ""
+  hold mi = 0
+  hold mitem = ""
+  while mi <= len(muts) {
+    hold mc = 44
+    when mi < len(muts) {
+      mc = sx_index(muts, mi)
+    }
+    when mc == 44 {
+      when len(mitem) > 0 {
+        hold bk = n32_uid("_bk", ctr)
+        bsave = concat(bsave, concat("__n32_chkscalar ", concat(mitem, "\n")))
+        bsave = concat(bsave, concat("hold ", concat(bk, concat(" = ", concat(mitem, "\n")))))
+        brest = concat(brest, concat(mitem, concat(" = ", concat(bk, "\n"))))
+        mitem = ""
+      }
+    } otherwise {
+      mitem = concat(mitem, chr(mc))
+    }
+    mi = mi + 1
+  }
+  hold tb = n32_block(src, bot + 1, bct, ctr, known, 1)
+  hold cp = bct + 1
+  hold ob = ""
+  hold nxt = n32_skip_ws(src, cp, b1)
+  when nxt < b1 && n32_id0(sx_index(src, nxt)) == 1 {
+    hold twe = nxt
+    while twe < b1 && is_name_char(sx_index(src, twe)) == 1 {
+      twe = twe + 1
+    }
+    hold tkw = sub(src, nxt, twe)
+    when string_eq(tkw, "otherwise") == 1 || string_eq(tkw, "else") == 1 {
+      hold tbo2 = n32_skip_ws(src, twe, b1)
+      when tbo2 >= b1 || sx_index(src, tbo2) != 123 {
+        hold badt2 = fail(1, "trial otherwise needs { ... }")
+      }
+      hold tbc2 = n32_close(src, tbo2, 123, 125)
+      when tbc2 < 0 || tbc2 >= b1 {
+        hold badt3 = fail(1, "unclosed '{' in trial otherwise")
+      }
+      ob = n32_block(src, tbo2 + 1, tbc2, ctr, known, in_tr)
+      cp = tbc2 + 1
+    }
+  }
+  hold tr_hd = concat("__n32_trial ", concat(lb, "\n"))
+  hold tr_mid = concat(rb, concat(" __n32_on_rewind ", concat(lb, "\n")))
+  hold out = concat(bsave, concat(tr_hd, concat(tb, concat(tr_mid, concat(brest, concat(ob, concat(rb, "\n")))))))
+  give n32_pair(numstr(cp), out)
+}
+
+make n32_block(src: str, b0: num, b1: num, ctr: list, known: str, in_tr: num) -> str {
+  hold lb = chr(123)
+  hold rb = chr(125)
+  hold out = ""
+  hold p = b0
+  while p < b1 {
+    p = n32_skip_ws(src, p, b1)
+    when p < b1 {
+      hold c = sx_index(src, p)
+      hold done = 0
+      when n32_id0(c) == 1 {
+        hold w0 = p
+        hold we = p
+        while we < b1 && is_name_char(sx_index(src, we)) == 1 {
+          we = we + 1
+        }
+        hold kw = sub(src, w0, we)
+
+        when string_eq(kw, "struct") == 1 {
+          done = 1
+          hold bos = n32_cond_end(src, we, b1)
+          when bos < b1 && sx_index(src, bos) == 123 {
+            hold bcs = n32_close(src, bos, 123, 125)
+            out = concat(out, concat(sub(src, w0, bcs + 1), "\n"))
+            p = bcs + 1
+          } otherwise {
+            hold ses = n32_stmt_end(src, w0, b1)
+            out = concat(out, concat(sub(src, w0, ses), "\n"))
+            p = ses
+          }
+        }
+        when done == 0 && string_eq(kw, "make") == 1 {
+          done = 1
+          hold bom = n32_cond_end(src, we, b1)
+          hold bcm = n32_close(src, bom, 123, 125)
+          when bom >= b1 || bcm < 0 {
+            hold badm = fail(1, "malformed make block")
+          }
+          hold hdrm = sub(src, w0, bom + 1)
+          hold fkn = known
+          hold lpm = find_byte(hdrm, 40)
+          when lpm >= 0 {
+            hold rpm = n32_close(hdrm, lpm, 40, 41)
+            when rpm > lpm {
+              hold pim = lpm + 1
+              while pim < rpm {
+                pim = n32_skip_ws(hdrm, pim, rpm)
+                when pim < rpm && n32_id0(sx_index(hdrm, pim)) == 1 {
+                  hold pn0 = pim
+                  while pim < rpm && is_name_char(sx_index(hdrm, pim)) == 1 {
+                    pim = pim + 1
+                  }
+                  fkn = n32_csv_add(fkn, sub(hdrm, pn0, pim))
+                }
+                while pim < rpm && sx_index(hdrm, pim) != 44 {
+                  pim = pim + 1
+                }
+                when pim < rpm && sx_index(hdrm, pim) == 44 {
+                  pim = pim + 1
+                }
+              }
+            }
+          }
+          hold mb = n32_block(src, bom + 1, bcm, ctr, fkn, 0)
+          out = concat(out, concat(hdrm, concat("\n", concat(mb, concat(rb, "\n")))))
+          p = bcm + 1
+        }
+        when done == 0 && string_eq(kw, "when") == 1 {
+          done = 1
+          hold cew = n32_cond_end(src, we, b1)
+          hold cpw = n32_expr(trim(sub(src, we, cew)), ctr, "")
+          hold bow = n32_skip_ws(src, cew, b1)
+          hold bcw = n32_close(src, bow, 123, 125)
+          when bow >= b1 || bcw < 0 {
+            hold badw = fail(1, "malformed when block")
+          }
+          hold wb = n32_block(src, bow + 1, bcw, ctr, known, in_tr)
+          out = concat(out, concat(n32_fst(cpw), concat("when ", concat(n32_snd(cpw), concat(" ", concat(lb, concat("\n", wb)))))))
+          p = bcw + 1
+          hold nxw = n32_skip_ws(src, p, b1)
+          hold has_ow = 0
+          when nxw < b1 && n32_id0(sx_index(src, nxw)) == 1 {
+            hold owe = nxw
+            while owe < b1 && is_name_char(sx_index(src, owe)) == 1 {
+              owe = owe + 1
+            }
+            hold ow = sub(src, nxw, owe)
+            when string_eq(ow, "otherwise") == 1 || string_eq(ow, "else") == 1 {
+              hold obo = n32_skip_ws(src, owe, b1)
+              hold obc = n32_close(src, obo, 123, 125)
+              when obo >= b1 || obc < 0 {
+                hold bado = fail(1, "malformed otherwise block")
+              }
+              hold obw = n32_block(src, obo + 1, obc, ctr, known, in_tr)
+              out = concat(out, concat(rb, concat(" otherwise ", concat(lb, concat("\n", concat(obw, concat(rb, "\n")))))))
+              p = obc + 1
+              has_ow = 1
+            }
+          }
+          when has_ow == 0 {
+            out = concat(out, concat(rb, "\n"))
+          }
+        }
+        when done == 0 && string_eq(kw, "while") == 1 {
+          done = 1
+          hold cel = n32_cond_end(src, we, b1)
+          hold cpl = n32_expr(trim(sub(src, we, cel)), ctr, "")
+          hold bol = n32_skip_ws(src, cel, b1)
+          hold bcl = n32_close(src, bol, 123, 125)
+          when bol >= b1 || bcl < 0 {
+            hold badwl = fail(1, "malformed while block")
+          }
+          hold lb_body = n32_block(src, bol + 1, bcl, ctr, known, in_tr)
+          hold wpre = n32_fst(cpl)
+          when len(wpre) == 0 {
+            out = concat(out, concat("while ", concat(n32_snd(cpl), concat(" ", concat(lb, concat("\n", concat(lb_body, concat(rb, "\n"))))))))
+          } otherwise {
+            hold wg = n32_uid("_wg", ctr)
+            out = concat(out, concat("hold ", concat(wg, " = 1\n")))
+            out = concat(out, concat("while ", concat(wg, concat(" == 1 ", concat(lb, "\n")))))
+            out = concat(out, wpre)
+            out = concat(out, concat("when ", concat(n32_snd(cpl), concat(" ", concat(lb, "\n")))))
+            out = concat(out, lb_body)
+            out = concat(out, concat(rb, concat(" otherwise ", concat(lb, "\n"))))
+            out = concat(out, concat(wg, concat(" = 0\n", concat(rb, concat("\n", concat(rb, "\n"))))))
+          }
+          p = bcl + 1
+        }
+        when done == 0 && string_eq(kw, "invariant") == 1 {
+          done = 1
+          hold ri = n32_do_inv(src, we, b1, ctr, known, in_tr)
+          p = tok_num(concat("n", n32_fst(ri)))
+          out = concat(out, n32_snd(ri))
+        }
+        when done == 0 && string_eq(kw, "converge") == 1 {
+          done = 1
+          hold rc = n32_do_conv(src, we, b1, ctr, known, in_tr)
+          p = tok_num(concat("n", n32_fst(rc)))
+          out = concat(out, n32_snd(rc))
+        }
+        when done == 0 && string_eq(kw, "trial") == 1 {
+          done = 1
+          hold rt = n32_do_trial(src, we, b1, ctr, known, in_tr)
+          p = tok_num(concat("n", n32_fst(rt)))
+          out = concat(out, n32_snd(rt))
+        }
+        when done == 0 && string_eq(kw, "rewind") == 1 {
+          done = 1
+          when in_tr == 0 {
+            hold badrw = fail(1, "rewind outside a trial block")
+          }
+          out = concat(out, "__n32_rewind\n")
+          p = n32_stmt_end(src, w0, b1)
+        }
+        when done == 0 && (string_eq(kw, "hold") == 1 || string_eq(kw, "show") == 1 || string_eq(kw, "give") == 1) {
+          done = 1
+          hold seh = n32_stmt_end(src, w0, b1)
+          when string_eq(kw, "hold") == 1 {
+            hold hp = n32_skip_ws(src, we, seh)
+            hold he = hp
+            while he < seh && is_name_char(sx_index(src, he)) == 1 {
+              he = he + 1
+            }
+            hold hnm = sub(src, hp, he)
+            hold eqh = he
+            while eqh < seh && sx_index(src, eqh) != 61 {
+              eqh = eqh + 1
+            }
+            when eqh < seh {
+              hold rph = n32_expr(trim(sub(src, eqh + 1, seh)), ctr, "")
+              out = concat(out, concat(n32_fst(rph), concat("hold ", concat(hnm, concat(" = ", concat(n32_snd(rph), "\n"))))))
+            } otherwise {
+              out = concat(out, concat(sub(src, w0, seh), "\n"))
+            }
+            known = n32_csv_add(known, hnm)
+          } otherwise {
+            hold rps = n32_expr(trim(sub(src, we, seh)), ctr, "")
+            out = concat(out, concat(n32_fst(rps), concat(kw, concat(" ", concat(n32_snd(rps), "\n")))))
+          }
+          p = seh
+        }
+        when done == 0 {
+          done = 1
+          hold sea = n32_stmt_end(src, w0, b1)
+          hold raw_s = sub(src, w0, sea)
+          hold eq_i = find_byte(raw_s, 61)
+          hold eq_prev = 0
+          when eq_i > 0 {
+            eq_prev = sx_index(raw_s, eq_i - 1)
+          }
+          when eq_i > 0 && eq_prev != 33 && eq_prev != 60 && eq_prev != 62 && (eq_i + 1 >= len(raw_s) || sx_index(raw_s, eq_i + 1) != 61) {
+            hold lpart = trim(sub(raw_s, 0, eq_i))
+            hold rpart = trim(sub(raw_s, eq_i + 1, len(raw_s)))
+            hold rpa = n32_expr(rpart, ctr, "")
+            out = concat(out, concat(n32_fst(rpa), concat(lpart, concat(" = ", concat(n32_snd(rpa), "\n")))))
+          } otherwise {
+            hold rpb = n32_expr(trim(raw_s), ctr, "")
+            out = concat(out, concat(n32_fst(rpb), concat(n32_snd(rpb), "\n")))
+          }
+          p = sea
+        }
+      }
+      when done == 0 {
+        hold seu = n32_stmt_end(src, p, b1)
+        when seu <= p {
+          p = p + 1
+        } otherwise {
+          hold rpu = n32_expr(trim(sub(src, p, seu)), ctr, "")
+          out = concat(out, concat(n32_fst(rpu), concat(n32_snd(rpu), "\n")))
+          p = seu
+        }
+      }
+    }
+  }
+  give out
+}
+
+make n32_lower(text: str) -> str {
+  when n32_has_adv(text) == 0 {
+    give text
+  }
+  hold ctr = [0]
+  give n32_block(text, 0, len(text), ctr, "", 0)
+}
+
 make run() -> num {
   when arg_count() < 3 {
     hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
@@ -5655,6 +6909,7 @@ make run() -> num {
   when len(src) == 0 {
     hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
   }
+  src = n32_lower(src)
 
   // A '{' inside a string literal that sits in a `when` CONDITION is read by
   // gen2 as the block opener, so `} otherwise {` has to be built out of

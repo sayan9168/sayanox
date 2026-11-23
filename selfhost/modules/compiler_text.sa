@@ -183,3 +183,1856 @@ make sxseed_csv_has(text: str, word: str) -> num {
   }
   give 0
 }
+
+// =====================================================================
+// Sayanox-original language constructs lowering for C-emitting backends:
+//   1. `trial { ... } [otherwise { ... }]` + `rewind`
+//   2. `converge VAR within BOUND { ... } [otherwise { ... }]`
+//   3. `invariant COND [otherwise { ... }]`
+//   4. `EXPR |> CALLEE(ARGS...)` with `_` placeholder
+//
+// Zero-allocation fast path (`sxadv_has_any == 0`) returns `text` untouched so
+// bootstrap compilation of `compiler_min.sa` within the 64 MiB budget incurs
+// zero heap overhead.
+
+make sxadv_id0(c: num) -> num {
+  give (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+}
+
+make sxadv_id(c: num) -> num {
+  give sxadv_id0(c) || (c >= 48 && c <= 57)
+}
+
+make sxadv_ws(c: num) -> num {
+  give c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12
+}
+
+make sxadv_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && sxadv_ws(sx_index(s, a)) == 1 {
+    hold a = a + 1
+  }
+  hold b = n
+  while b > a && sxadv_ws(sx_index(s, b - 1)) == 1 {
+    hold b = b - 1
+  }
+  when a >= b {
+    give ""
+  }
+  give sxseed_slice(s, a, b)
+}
+
+make sxadv_word_is(text: str, a: num, b: num, kw: str) -> num {
+  hold kn = len(kw)
+  when b - a != kn {
+    give 0
+  }
+  hold k = 0
+  while k < kn {
+    when sx_index(text, a + k) != sx_index(kw, k) {
+      give 0
+    }
+    hold k = k + 1
+  }
+  give 1
+}
+
+make sxadv_has_any(text: str) -> num {
+  hold n = len(text)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        hold qc = sx_index(text, i)
+        when qc == 92 {
+          hold i = i + 2
+        } otherwise {
+          when qc == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+        while i < n && sx_index(text, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when c == 124 && i + 1 < n && sx_index(text, i + 1) == 62 {
+          give 1
+        }
+        when sxadv_id0(c) == 1 {
+          hold w0 = i
+          while i < n && sxadv_id(sx_index(text, i)) == 1 {
+            hold i = i + 1
+          }
+          hold wl = i - w0
+          when wl == 1 && c == 95 {
+            give 1
+          }
+          when wl == 5 && sxadv_word_is(text, w0, i, "trial") == 1 {
+            give 1
+          }
+          when wl == 6 && sxadv_word_is(text, w0, i, "rewind") == 1 {
+            give 1
+          }
+          when wl == 8 && sxadv_word_is(text, w0, i, "converge") == 1 {
+            give 1
+          }
+          when wl == 9 && sxadv_word_is(text, w0, i, "invariant") == 1 {
+            give 1
+          }
+        } otherwise {
+          hold i = i + 1
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make sxadv_skip_ws(s: str, pos: num, lim: num) -> num {
+  hold i = pos
+  hold go = 1
+  while i < lim && go == 1 {
+    while i < lim && sxadv_ws(sx_index(s, i)) == 1 {
+      hold i = i + 1
+    }
+    when i + 1 < lim && sx_index(s, i) == 47 && sx_index(s, i + 1) == 47 {
+      while i < lim && sx_index(s, i) != 10 {
+        hold i = i + 1
+      }
+    } otherwise {
+      hold go = 0
+    }
+  }
+  give i
+}
+
+make sxadv_brace_end(s: str, open: num) -> num {
+  hold n = len(s)
+  hold i = open + 1
+  hold depth = 1
+  while i < n && depth > 0 {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(s, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(s, i + 1) == 47 {
+        while i < n && sx_index(s, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when c == 123 {
+          hold depth = depth + 1
+        }
+        when c == 125 {
+          hold depth = depth - 1
+          when depth == 0 {
+            give i
+          }
+        }
+        hold i = i + 1
+      }
+    }
+  }
+  give 0 - 1
+}
+
+make sxadv_close_delim(s: str, open: num, open_ch: num, close_ch: num) -> num {
+  hold n = len(s)
+  hold i = open + 1
+  hold depth = 1
+  while i < n && depth > 0 {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(s, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(s, i + 1) == 47 {
+        while i < n && sx_index(s, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when c == open_ch {
+          hold depth = depth + 1
+        }
+        when c == close_ch {
+          hold depth = depth - 1
+          when depth == 0 {
+            give i
+          }
+        }
+        hold i = i + 1
+      }
+    }
+  }
+  give 0 - 1
+}
+
+make sxadv_cond_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold nest = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        while i < lim && sx_index(s, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when nest == 0 && c == 123 {
+          give i
+        }
+        when c == 40 || c == 91 {
+          hold nest = nest + 1
+        }
+        when c == 41 || c == 93 {
+          when nest > 0 {
+            hold nest = nest - 1
+          }
+        }
+        hold i = i + 1
+      }
+    }
+  }
+  give lim
+}
+
+make sxadv_inv_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold nest = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        give i
+      } otherwise {
+        when nest == 0 && (c == 10 || c == 13 || c == 123 || c == 125) {
+          give i
+        }
+        when c == 40 || c == 91 {
+          hold nest = nest + 1
+        }
+        when c == 41 || c == 93 {
+          when nest > 0 {
+            hold nest = nest - 1
+          }
+        }
+        when nest == 0 && sxadv_id0(c) == 1 {
+          hold prev_ok = 1
+          when i > from && sxadv_id(sx_index(s, i - 1)) == 1 {
+            hold prev_ok = 0
+          }
+          when prev_ok == 1 {
+            hold we = i
+            while we < lim && sxadv_id(sx_index(s, we)) == 1 {
+              hold we = we + 1
+            }
+            when sxadv_word_is(s, i, we, "otherwise") == 1 || sxadv_word_is(s, i, we, "else") == 1 {
+              give i
+            }
+            hold i = we - 1
+          }
+        }
+        hold i = i + 1
+      }
+    }
+  }
+  give lim
+}
+
+// Scan to end of a single-line statement, respecting strings, parens, brackets,
+// struct-literal braces, and continuation lines after `=`, `+`, `-`, `*`, `/`,
+// `,`, `|>`.
+make sxadv_stmt_end(s: str, from: num, lim: num) -> num {
+  hold i = from
+  hold nest = 0
+  hold last_sig = 0
+  while i < lim {
+    hold c = sx_index(s, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < lim && q == 1 {
+        when sx_index(s, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(s, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+      hold last_sig = 34
+    } otherwise {
+      when c == 47 && i + 1 < lim && sx_index(s, i + 1) == 47 {
+        while i < lim && sx_index(s, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when nest == 0 && c == 125 {
+          give i
+        }
+        when nest == 0 && (c == 10 || c == 13) {
+          hold cont = 0
+          when last_sig == 61 || last_sig == 44 || last_sig == 620 {
+            hold cont = 1
+          }
+          when cont == 0 {
+            // Also check if next non-ws token on following line is `|>`
+            hold nx = sxadv_skip_ws(s, i + 1, lim)
+            when nx + 1 < lim && sx_index(s, nx) == 124 && sx_index(s, nx + 1) == 62 {
+              hold cont = 1
+            }
+          }
+          when cont == 0 {
+            give i
+          }
+          hold i = i + 1
+        } otherwise {
+          when c == 40 || c == 91 || c == 123 {
+            hold nest = nest + 1
+            hold last_sig = c
+            hold i = i + 1
+          } otherwise {
+            when c == 41 || c == 93 || c == 125 {
+              when nest > 0 {
+                hold nest = nest - 1
+              }
+              hold last_sig = c
+              hold i = i + 1
+            } otherwise {
+              when sxadv_id0(c) == 1 && nest == 0 {
+                hold w0 = i
+                while i < lim && sxadv_id(sx_index(s, i)) == 1 {
+                  hold i = i + 1
+                }
+                when w0 > from {
+                  when sxadv_word_is(s, w0, i, "hold") == 1 || sxadv_word_is(s, w0, i, "show") == 1 || sxadv_word_is(s, w0, i, "when") == 1 || sxadv_word_is(s, w0, i, "while") == 1 || sxadv_word_is(s, w0, i, "for") == 1 || sxadv_word_is(s, w0, i, "give") == 1 || sxadv_word_is(s, w0, i, "break") == 1 || sxadv_word_is(s, w0, i, "continue") == 1 || sxadv_word_is(s, w0, i, "trial") == 1 || sxadv_word_is(s, w0, i, "rewind") == 1 || sxadv_word_is(s, w0, i, "converge") == 1 || sxadv_word_is(s, w0, i, "invariant") == 1 || sxadv_word_is(s, w0, i, "otherwise") == 1 || sxadv_word_is(s, w0, i, "else") == 1 || sxadv_word_is(s, w0, i, "elif") == 1 {
+                    give w0
+                  }
+                }
+                hold last_sig = 97
+              } otherwise {
+                when c == 124 && i + 1 < lim && sx_index(s, i + 1) == 62 {
+                  hold last_sig = 620
+                  hold i = i + 2
+                } otherwise {
+                  when sxadv_ws(c) == 0 {
+                    hold last_sig = c
+                  }
+                  hold i = i + 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give lim
+}
+
+make sxadv_pair(pre: str, code: str) -> str {
+  give concat(pre, concat(chr(1), code))
+}
+
+make sxadv_pre(p: str) -> str {
+  hold n = len(p)
+  hold i = 0
+  while i < n {
+    when sx_index(p, i) == 1 {
+      give sxseed_slice(p, 0, i)
+    }
+    hold i = i + 1
+  }
+  give ""
+}
+
+make sxadv_code(p: str) -> str {
+  hold n = len(p)
+  hold i = 0
+  while i < n {
+    when sx_index(p, i) == 1 {
+      give sxseed_slice(p, i + 1, n)
+    }
+    hold i = i + 1
+  }
+  give p
+}
+
+make sxadv_next_id(priv: str, tag: str, state: list) -> str {
+  hold idx = len(state)
+  push(state, 1)
+  give concat(priv, concat(tag, sxedigits(idx)))
+}
+
+make sxadv_ctx_get(ctx: str, key: str) -> str {
+  hold pat = concat("|", concat(key, "="))
+  hold pn = len(pat)
+  hold cn = len(ctx)
+  hold i = 0
+  while i + pn <= cn {
+    hold ok = 1
+    hold j = 0
+    while j < pn && ok == 1 {
+      when sx_index(ctx, i + j) != sx_index(pat, j) {
+        hold ok = 0
+      }
+      hold j = j + 1
+    }
+    when ok == 1 {
+      hold vs = i + pn
+      hold ve = vs
+      while ve < cn && sx_index(ctx, ve) != 124 {
+        hold ve = ve + 1
+      }
+      give sxseed_slice(ctx, vs, ve)
+    }
+    hold i = i + 1
+  }
+  give ""
+}
+
+make sxadv_ctx_put(ctx: str, key: str, val: str) -> str {
+  hold pat = concat("|", concat(key, "="))
+  hold pn = len(pat)
+  hold cn = len(ctx)
+  hold out = "|"
+  hold i = 1
+  while i < cn {
+    hold e = i
+    while e < cn && sx_index(ctx, e) != 124 {
+      hold e = e + 1
+    }
+    hold entry = sxseed_slice(ctx, i - 1, e)
+    hold keep = 1
+    when len(entry) >= pn {
+      when string_eq(sxseed_slice(entry, 0, pn), pat) == 1 {
+        hold keep = 0
+      }
+    }
+    when keep == 1 && e > i {
+      hold out = concat(out, concat(sxseed_slice(ctx, i, e), "|"))
+    }
+    hold i = e + 1
+  }
+  give concat(out, concat(key, concat("=", concat(val, "|"))))
+}
+
+make sxadv_csv_add(csv: str, nm: str) -> str {
+  when len(nm) == 0 {
+    give csv
+  }
+  when sxseed_csv_has(csv, nm) == 1 {
+    give csv
+  }
+  when len(csv) == 0 {
+    give nm
+  }
+  give concat(csv, concat(",", nm))
+}
+
+make sxadv_has_top_hole(raw: str) -> num {
+  hold n = len(raw)
+  hold i = 0
+  hold depth = 0
+  while i < n {
+    hold c = sx_index(raw, i)
+    when c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(raw, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(raw, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(raw, i + 1) == 47 {
+        while i < n && sx_index(raw, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when c == 40 || c == 91 || c == 123 {
+          hold depth = depth + 1
+          hold i = i + 1
+        } otherwise {
+          when c == 41 || c == 93 || c == 125 {
+            when depth > 0 {
+              hold depth = depth - 1
+            }
+            hold i = i + 1
+          } otherwise {
+            when depth == 0 && c == 95 {
+              hold prev_id = 0
+              when i > 0 && sxadv_id(sx_index(raw, i - 1)) == 1 {
+                hold prev_id = 1
+              }
+              hold next_id = 0
+              when i + 1 < n && sxadv_id(sx_index(raw, i + 1)) == 1 {
+                hold next_id = 1
+              }
+              when prev_id == 0 && next_id == 0 {
+                give 1
+              }
+            }
+            hold i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give 0
+}
+
+make sxadv_args(raw: str, priv: str, state: list, hole: str) -> str {
+  hold trimmed = sxadv_trim(raw)
+  when len(trimmed) == 0 {
+    give sxadv_pair("", "")
+  }
+  hold n = len(raw)
+  hold pre_all = ""
+  hold out_args = ""
+  hold seg_s = 0
+  hold depth = 0
+  hold i = 0
+  hold first = 1
+  while i <= n {
+    hold c = 44
+    when i < n {
+      hold c = sx_index(raw, i)
+    }
+    when i < n && c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(raw, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(raw, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when i < n && c == 47 && i + 1 < n && sx_index(raw, i + 1) == 47 {
+        while i < n && sx_index(raw, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when i < n && (c == 40 || c == 91 || c == 123) {
+          hold depth = depth + 1
+          hold i = i + 1
+        } otherwise {
+          when i < n && (c == 41 || c == 93 || c == 125) {
+            when depth > 0 {
+              hold depth = depth - 1
+            }
+            hold i = i + 1
+          } otherwise {
+            when depth == 0 && c == 44 {
+              hold piece = sxadv_trim(sxseed_slice(raw, seg_s, i))
+              hold rp = sxadv_expr(piece, priv, state, hole)
+              hold pre_all = concat(pre_all, sxadv_pre(rp))
+              when first == 0 {
+                hold out_args = concat(out_args, ", ")
+              }
+              hold out_args = concat(out_args, sxadv_code(rp))
+              hold first = 0
+              hold seg_s = i + 1
+              hold i = i + 1
+            } otherwise {
+              hold i = i + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give sxadv_pair(pre_all, out_args)
+}
+
+make sxadv_fields(raw: str, priv: str, state: list, hole: str) -> str {
+  hold trimmed = sxadv_trim(raw)
+  when len(trimmed) == 0 {
+    give sxadv_pair("", "")
+  }
+  hold n = len(raw)
+  hold pre_all = ""
+  hold out_f = ""
+  hold seg_s = 0
+  hold depth = 0
+  hold i = 0
+  hold first = 1
+  while i <= n {
+    hold c = 44
+    when i < n {
+      hold c = sx_index(raw, i)
+    }
+    when i < n && c == 34 {
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(raw, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(raw, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+    } otherwise {
+      when i < n && (c == 40 || c == 91 || c == 123) {
+        hold depth = depth + 1
+        hold i = i + 1
+      } otherwise {
+        when i < n && (c == 41 || c == 93 || c == 125) {
+          when depth > 0 {
+            hold depth = depth - 1
+          }
+          hold i = i + 1
+        } otherwise {
+          when depth == 0 && c == 44 {
+            hold piece = sxadv_trim(sxseed_slice(raw, seg_s, i))
+            when len(piece) > 0 {
+              // Check `label: expr` vs positional `expr`
+              hold pn = len(piece)
+              hold pk = 0
+              while pk < pn && sxadv_id(sx_index(piece, pk)) == 1 {
+                hold pk = pk + 1
+              }
+              hold pws = pk
+              while pws < pn && (sx_index(piece, pws) == 32 || sx_index(piece, pws) == 9) {
+                hold pws = pws + 1
+              }
+              when first == 0 {
+                hold out_f = concat(out_f, ", ")
+              }
+              when pk > 0 && pws < pn && sx_index(piece, pws) == 58 {
+                hold lbl = sxseed_slice(piece, 0, pws + 1)
+                hold fexpr = sxadv_trim(sxseed_slice(piece, pws + 1, pn))
+                hold rp = sxadv_expr(fexpr, priv, state, hole)
+                hold pre_all = concat(pre_all, sxadv_pre(rp))
+                hold out_f = concat(out_f, concat(lbl, concat(" ", sxadv_code(rp))))
+              } otherwise {
+                hold rp2 = sxadv_expr(piece, priv, state, hole)
+                hold pre_all = concat(pre_all, sxadv_pre(rp2))
+                hold out_f = concat(out_f, sxadv_code(rp2))
+              }
+              hold first = 0
+            }
+            hold seg_s = i + 1
+            hold i = i + 1
+          } otherwise {
+            hold i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give sxadv_pair(pre_all, out_f)
+}
+
+make sxadv_expr(expr: str, priv: str, state: list, hole: str) -> str {
+  hold n = len(expr)
+  hold pre_all = ""
+  hold cur = ""
+  hold add_start = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(expr, i)
+    when c == 34 {
+      hold s0 = i
+      hold i = i + 1
+      hold q = 1
+      while i < n && q == 1 {
+        when sx_index(expr, i) == 92 {
+          hold i = i + 2
+        } otherwise {
+          when sx_index(expr, i) == 34 {
+            hold q = 0
+          }
+          hold i = i + 1
+        }
+      }
+      hold cur = concat(cur, sxseed_slice(expr, s0, i))
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(expr, i + 1) == 47 {
+        while i < n && sx_index(expr, i) != 10 {
+          hold i = i + 1
+        }
+      } otherwise {
+        when c == 40 {
+          hold close_p = sxadv_close_delim(expr, i, 40, 41)
+          when close_p < 0 {
+            push(state, 3)
+            give sxadv_pair(pre_all, expr)
+          }
+          hold inner_p = sxadv_expr(sxseed_slice(expr, i + 1, close_p), priv, state, hole)
+          hold pre_all = concat(pre_all, sxadv_pre(inner_p))
+          hold cur = concat(cur, concat("(", concat(sxadv_code(inner_p), ")")))
+          hold i = close_p + 1
+        } otherwise {
+          when c == 91 {
+            hold close_b = sxadv_close_delim(expr, i, 91, 93)
+            when close_b < 0 {
+              push(state, 3)
+              give sxadv_pair(pre_all, expr)
+            }
+            hold inner_b = sxadv_args(sxseed_slice(expr, i + 1, close_b), priv, state, hole)
+            hold pre_all = concat(pre_all, sxadv_pre(inner_b))
+            hold cur = concat(cur, concat("[", concat(sxadv_code(inner_b), "]")))
+            hold i = close_b + 1
+          } otherwise {
+            when c == 124 && i + 1 < n && sx_index(expr, i + 1) == 62 {
+              hold lhs_s = sxadv_trim(sxseed_slice(cur, add_start, len(cur)))
+              when len(lhs_s) == 0 {
+                push(state, 3)
+                give sxadv_pair(pre_all, expr)
+              }
+              hold ptmp = sxadv_next_id(priv, "_p", state)
+              hold pre_all = concat(pre_all, concat("hold ", concat(ptmp, concat(" = ", concat(lhs_s, "\n")))))
+              hold p = sxadv_skip_ws(expr, i + 2, n)
+              when p >= n || sxadv_id0(sx_index(expr, p)) == 0 {
+                push(state, 3)
+                give sxadv_pair(pre_all, expr)
+              }
+              hold cs = p
+              while p < n && sxadv_id(sx_index(expr, p)) == 1 {
+                hold p = p + 1
+              }
+              while p < n && (sx_index(expr, p) == 32 || sx_index(expr, p) == 9) {
+                hold p = p + 1
+              }
+              when p < n && sx_index(expr, p) == 60 {
+                hold close_g = sxadv_close_delim(expr, p, 60, 62)
+                when close_g > p {
+                  hold p = close_g + 1
+                  while p < n && (sx_index(expr, p) == 32 || sx_index(expr, p) == 9) {
+                    hold p = p + 1
+                  }
+                }
+              }
+              when p >= n || sx_index(expr, p) != 40 {
+                push(state, 3)
+                give sxadv_pair(pre_all, expr)
+              }
+              hold close_c = sxadv_close_delim(expr, p, 40, 41)
+              when close_c < 0 {
+                push(state, 3)
+                give sxadv_pair(pre_all, expr)
+              }
+              hold callee_hd = sxseed_slice(expr, cs, p)
+              hold raw_ca = sxseed_slice(expr, p + 1, close_c)
+              hold eff_ca = raw_ca
+              when sxadv_has_top_hole(raw_ca) == 0 {
+                hold tr_ca = sxadv_trim(raw_ca)
+                when len(tr_ca) == 0 {
+                  hold eff_ca = "_"
+                } otherwise {
+                  hold eff_ca = concat("_, ", tr_ca)
+                }
+              }
+              hold r_ca = sxadv_args(eff_ca, priv, state, ptmp)
+              hold pre_all = concat(pre_all, sxadv_pre(r_ca))
+              hold call_built = concat(callee_hd, concat("(", concat(sxadv_code(r_ca), ")")))
+              hold cur = concat(sxseed_slice(cur, 0, add_start), call_built)
+              hold i = close_c + 1
+            } otherwise {
+              when sxadv_id0(c) == 1 {
+                hold w0 = i
+                while i < n && sxadv_id(sx_index(expr, i)) == 1 {
+                  hold i = i + 1
+                }
+                hold w = sxseed_slice(expr, w0, i)
+                hold prev_dot = 0
+                when w0 > 0 && sx_index(expr, w0 - 1) == 46 {
+                  hold prev_dot = 1
+                }
+                when prev_dot == 0 && (string_eq(w, "and") == 1 || string_eq(w, "or") == 1 || string_eq(w, "not") == 1) {
+                  hold cur = concat(cur, w)
+                  hold add_start = len(cur)
+                } otherwise {
+                  when prev_dot == 0 && string_eq(w, "_") == 1 {
+                    when len(hole) == 0 {
+                      push(state, 2)
+                      hold cur = concat(cur, "_")
+                    } otherwise {
+                      hold cur = concat(cur, hole)
+                    }
+                  } otherwise {
+                    // Check `Name[<...>](...)` call or `Name[<...>] { ... }` struct literal
+                    hold p2 = i
+                    while p2 < n && (sx_index(expr, p2) == 32 || sx_index(expr, p2) == 9) {
+                      hold p2 = p2 + 1
+                    }
+                    hold head_end = i
+                    when p2 < n && sx_index(expr, p2) == 60 {
+                      hold cg2 = sxadv_close_delim(expr, p2, 60, 62)
+                      when cg2 > p2 {
+                        hold after_g = cg2 + 1
+                        while after_g < n && (sx_index(expr, after_g) == 32 || sx_index(expr, after_g) == 9) {
+                          hold after_g = after_g + 1
+                        }
+                        when after_g < n && (sx_index(expr, after_g) == 40 || sx_index(expr, after_g) == 123) {
+                          hold head_end = cg2 + 1
+                          hold p2 = after_g
+                        }
+                      }
+                    }
+                    when p2 < n && sx_index(expr, p2) == 40 {
+                      hold cc2 = sxadv_close_delim(expr, p2, 40, 41)
+                      when cc2 < 0 {
+                        push(state, 3)
+                        give sxadv_pair(pre_all, expr)
+                      }
+                      hold hd2 = sxseed_slice(expr, w0, head_end)
+                      hold sub_a = sxadv_args(sxseed_slice(expr, p2 + 1, cc2), priv, state, "")
+                      hold pre_all = concat(pre_all, sxadv_pre(sub_a))
+                      hold cur = concat(cur, concat(hd2, concat("(", concat(sxadv_code(sub_a), ")"))))
+                      hold i = cc2 + 1
+                    } otherwise {
+                      when p2 < n && sx_index(expr, p2) == 123 {
+                        hold cb2 = sxadv_brace_end(expr, p2)
+                        when cb2 < 0 {
+                          push(state, 3)
+                          give sxadv_pair(pre_all, expr)
+                        }
+                        hold hd3 = sxseed_slice(expr, w0, head_end)
+                        hold sub_f = sxadv_fields(sxseed_slice(expr, p2 + 1, cb2), priv, state, hole)
+                        hold pre_all = concat(pre_all, sxadv_pre(sub_f))
+                        hold cur = concat(cur, concat(hd3, concat(" { ", concat(sxadv_code(sub_f), " }"))))
+                        hold i = cb2 + 1
+                      } otherwise {
+                        hold cur = concat(cur, w)
+                      }
+                    }
+                  }
+                }
+              } otherwise {
+                when (c == 61 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 33 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 60 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 62 && i + 1 < n && sx_index(expr, i + 1) == 61) || (c == 38 && i + 1 < n && sx_index(expr, i + 1) == 38) || (c == 124 && i + 1 < n && sx_index(expr, i + 1) == 124) || (c == 46 && i + 1 < n && sx_index(expr, i + 1) == 46) {
+                  hold cur = concat(cur, sxseed_slice(expr, i, i + 2))
+                  hold add_start = len(cur)
+                  hold i = i + 2
+                } otherwise {
+                  when c == 60 || c == 62 || c == 44 {
+                    hold cur = concat(cur, chr(c))
+                    hold add_start = len(cur)
+                    hold i = i + 1
+                  } otherwise {
+                    when c == 10 || c == 13 {
+                      hold cur = concat(cur, " ")
+                      hold i = i + 1
+                    } otherwise {
+                      hold cur = concat(cur, chr(c))
+                      hold i = i + 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  give sxadv_pair(pre_all, cur)
+}
+
+// Scan `body` of a `trial` block for mutations to outer variables in `known` CSV.
+// Pushes error `5` to `state` if an outer list (`push(v, ...)` / `v[...] = ...`)
+// or outer struct (`v.f = ...`) is mutated.
+make sxadv_scan_muts(body: str, known: str, state: list) -> str {
+  hold muts = ""
+  hold inner = ""
+  hold n = len(body)
+  hold p = 0
+  hold stmt_head = 1
+  while p < n {
+    hold c = sx_index(body, p)
+    when sxadv_ws(c) == 1 {
+      when c == 10 || c == 13 {
+        hold stmt_head = 1
+      }
+      hold p = p + 1
+    } otherwise {
+      when c == 47 && p + 1 < n && sx_index(body, p + 1) == 47 {
+        while p < n && sx_index(body, p) != 10 {
+          hold p = p + 1
+        }
+        hold stmt_head = 1
+      } otherwise {
+        when c == 34 {
+          hold p = p + 1
+          hold q = 1
+          while p < n && q == 1 {
+            when sx_index(body, p) == 92 {
+              hold p = p + 2
+            } otherwise {
+              when sx_index(body, p) == 34 {
+                hold q = 0
+              }
+              hold p = p + 1
+            }
+          }
+          hold stmt_head = 0
+        } otherwise {
+          when c == 123 || c == 125 {
+            hold stmt_head = 1
+            hold p = p + 1
+          } otherwise {
+            when sxadv_id0(c) == 1 {
+              hold w0 = p
+              while p < n && sxadv_id(sx_index(body, p)) == 1 {
+                hold p = p + 1
+              }
+              hold w = sxseed_slice(body, w0, p)
+              when stmt_head == 1 && (string_eq(w, "hold") == 1 || string_eq(w, "for") == 1 || string_eq(w, "converge") == 1) {
+                while p < n && (sx_index(body, p) == 32 || sx_index(body, p) == 9) {
+                  hold p = p + 1
+                }
+                when p < n && sxadv_id0(sx_index(body, p)) == 1 {
+                  hold v0 = p
+                  while p < n && sxadv_id(sx_index(body, p)) == 1 {
+                    hold p = p + 1
+                  }
+                  hold vnm = sxseed_slice(body, v0, p)
+                  when sxseed_csv_has(inner, vnm) == 0 {
+                    when sxseed_csv_has(known, vnm) == 1 {
+                      hold muts = sxadv_csv_add(muts, vnm)
+                    } otherwise {
+                      hold inner = sxadv_csv_add(inner, vnm)
+                    }
+                  }
+                }
+                hold stmt_head = 0
+              } otherwise {
+                when string_eq(w, "push") == 1 {
+                  hold q2 = p
+                  while q2 < n && (sx_index(body, q2) == 32 || sx_index(body, q2) == 9) {
+                    hold q2 = q2 + 1
+                  }
+                  when q2 < n && sx_index(body, q2) == 40 {
+                    hold q2 = sxadv_skip_ws(body, q2 + 1, n)
+                    when q2 < n && sxadv_id0(sx_index(body, q2)) == 1 {
+                      hold a0 = q2
+                      while q2 < n && sxadv_id(sx_index(body, q2)) == 1 {
+                        hold q2 = q2 + 1
+                      }
+                      hold anm = sxseed_slice(body, a0, q2)
+                      hold q2 = sxadv_skip_ws(body, q2, n)
+                      when q2 < n && sx_index(body, q2) == 44 {
+                        when sxseed_csv_has(inner, anm) == 0 && sxseed_csv_has(known, anm) == 1 {
+                          push(state, 5)
+                        }
+                      }
+                    }
+                  }
+                  hold stmt_head = 0
+                } otherwise {
+                  when stmt_head == 1 && string_eq(w, "when") == 0 && string_eq(w, "while") == 0 && string_eq(w, "otherwise") == 0 && string_eq(w, "else") == 0 && string_eq(w, "elif") == 0 && string_eq(w, "show") == 0 && string_eq(w, "give") == 0 && string_eq(w, "trial") == 0 && string_eq(w, "rewind") == 0 && string_eq(w, "invariant") == 0 && string_eq(w, "break") == 0 && string_eq(w, "continue") == 0 {
+                    hold q3 = p
+                    while q3 < n && (sx_index(body, q3) == 32 || sx_index(body, q3) == 9) {
+                      hold q3 = q3 + 1
+                    }
+                    when q3 < n {
+                      hold qc = sx_index(body, q3)
+                      when qc == 61 && (q3 + 1 >= n || sx_index(body, q3 + 1) != 61) {
+                        when sxseed_csv_has(inner, w) == 0 && sxseed_csv_has(known, w) == 1 {
+                          hold muts = sxadv_csv_add(muts, w)
+                        }
+                      }
+                      when (qc == 43 || qc == 45) && q3 + 1 < n && sx_index(body, q3 + 1) == 61 {
+                        when sxseed_csv_has(inner, w) == 0 && sxseed_csv_has(known, w) == 1 {
+                          hold muts = sxadv_csv_add(muts, w)
+                        }
+                      }
+                      when qc == 46 {
+                        hold qf = q3 + 1
+                        while qf < n && sxadv_id(sx_index(body, qf)) == 1 {
+                          hold qf = qf + 1
+                        }
+                        while qf < n && (sx_index(body, qf) == 32 || sx_index(body, qf) == 9) {
+                          hold qf = qf + 1
+                        }
+                        when qf < n && sx_index(body, qf) == 61 && (qf + 1 >= n || sx_index(body, qf + 1) != 61) {
+                          when sxseed_csv_has(inner, w) == 0 && sxseed_csv_has(known, w) == 1 {
+                            push(state, 5)
+                          }
+                        }
+                      }
+                      when qc == 91 {
+                        hold qb = sxadv_close_delim(body, q3, 91, 93)
+                        when qb > q3 {
+                          hold qa = qb + 1
+                          while qa < n && (sx_index(body, qa) == 32 || sx_index(body, qa) == 9) {
+                            hold qa = qa + 1
+                          }
+                          when qa < n && sx_index(body, qa) == 61 && (qa + 1 >= n || sx_index(body, qa + 1) != 61) {
+                            when sxseed_csv_has(inner, w) == 0 && sxseed_csv_has(known, w) == 1 {
+                              push(state, 5)
+                            }
+                          }
+                        }
+                      }
+                    }
+                    hold stmt_head = 0
+                  } otherwise {
+                    when string_eq(w, "rewind") == 1 || string_eq(w, "break") == 1 || string_eq(w, "continue") == 1 {
+                      hold stmt_head = 1
+                    } otherwise {
+                      hold stmt_head = 0
+                    }
+                  }
+                }
+              }
+            } otherwise {
+              hold stmt_head = 0
+              hold p = p + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give muts
+}
+
+make sxadv_when_chain(src: str, kw_end: num, b1: num, priv: str, state: list, ctx: str) -> str {
+  hold ce = sxadv_cond_end(src, kw_end, b1)
+  hold cp = sxadv_expr(sxadv_trim(sxseed_slice(src, kw_end, ce)), priv, state, "")
+  hold bopen = sxadv_skip_ws(src, ce, b1)
+  when bopen >= b1 || sx_index(src, bopen) != 123 {
+    push(state, 6)
+    give sxadv_pair(sxedigits(b1), "")
+  }
+  hold bclose = sxadv_brace_end(src, bopen)
+  when bclose < 0 || bclose >= b1 {
+    push(state, 6)
+    give sxadv_pair(sxedigits(b1), "")
+  }
+  hold arm_body = sxadv_block(src, bopen + 1, bclose, priv, state, ctx)
+  hold cur_pos = bclose + 1
+  hold out = concat(sxadv_pre(cp), concat("when ", concat(sxadv_code(cp), concat(" {\n", concat(arm_body, "}")))))
+  hold nx = sxadv_skip_ws(src, cur_pos, b1)
+  when nx < b1 && sxadv_id0(sx_index(src, nx)) == 1 {
+    hold we = nx
+    while we < b1 && sxadv_id(sx_index(src, we)) == 1 {
+      hold we = we + 1
+    }
+    hold tw = sxseed_slice(src, nx, we)
+    when string_eq(tw, "elif") == 1 {
+      hold rest = sxadv_when_chain(src, we, b1, priv, state, ctx)
+      hold cur_pos = strnum_adv(sxadv_pre(rest))
+      hold out = concat(out, concat(" otherwise {\n", concat(sxadv_code(rest), "\n}")))
+      give sxadv_pair(sxedigits(cur_pos), out)
+    }
+    when string_eq(tw, "otherwise") == 1 || string_eq(tw, "else") == 1 {
+      hold nx2 = sxadv_skip_ws(src, we, b1)
+      when nx2 < b1 && sxadv_id0(sx_index(src, nx2)) == 1 {
+        hold we2 = nx2
+        while we2 < b1 && sxadv_id(sx_index(src, we2)) == 1 {
+          hold we2 = we2 + 1
+        }
+        hold tw2 = sxseed_slice(src, nx2, we2)
+        when string_eq(tw2, "when") == 1 || string_eq(tw2, "if") == 1 {
+          hold rest2 = sxadv_when_chain(src, we2, b1, priv, state, ctx)
+          hold cur_pos = strnum_adv(sxadv_pre(rest2))
+          hold out = concat(out, concat(" otherwise {\n", concat(sxadv_code(rest2), "\n}")))
+          give sxadv_pair(sxedigits(cur_pos), out)
+        }
+      }
+      when nx2 >= b1 || sx_index(src, nx2) != 123 {
+        push(state, 6)
+        give sxadv_pair(sxedigits(b1), out)
+      }
+      hold eclose = sxadv_brace_end(src, nx2)
+      when eclose < 0 || eclose >= b1 {
+        push(state, 6)
+        give sxadv_pair(sxedigits(b1), out)
+      }
+      hold ebody = sxadv_block(src, nx2 + 1, eclose, priv, state, ctx)
+      hold cur_pos = eclose + 1
+      hold out = concat(out, concat(" otherwise {\n", concat(ebody, "}")))
+      give sxadv_pair(sxedigits(cur_pos), out)
+    }
+  }
+  give sxadv_pair(sxedigits(cur_pos), concat(out, "\n"))
+}
+
+make strnum_adv(s: str) -> num {
+  hold n = len(s)
+  hold v = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      hold v = v * 10 + (c - 48)
+    }
+    hold i = i + 1
+  }
+  give v
+}
+
+make sxadv_res(next_p: num, code: str) -> str {
+  give sxadv_pair(sxedigits(next_p), code)
+}
+
+make sxadv_do_make(src: str, w0: num, we: num, b1: num, priv: str, state: list) -> str {
+  // Note: `state[len(state)-1]` is untouched; caller passes `ctx` via `priv_ctx`
+  hold sep = sxadv_pre(priv)
+  hold rpriv = sep
+  hold ctx = sxadv_code(priv)
+  hold known = sxadv_ctx_get(ctx, "known")
+  hold bo_m = sxadv_cond_end(src, we, b1)
+  when bo_m < b1 && sx_index(src, bo_m) == 123 {
+    hold bc_m = sxadv_brace_end(src, bo_m)
+    when bc_m > bo_m {
+      hold hdr_m = sxseed_slice(src, w0, bo_m + 1)
+      hold fn_known = known
+      hold lp_m = 0
+      hold hi_m = 0
+      while hi_m < len(hdr_m) && lp_m == 0 {
+        when sx_index(hdr_m, hi_m) == 40 {
+          hold lp_m = hi_m
+        }
+        hold hi_m = hi_m + 1
+      }
+      when lp_m > 0 {
+        hold rp_m = sxadv_close_delim(hdr_m, lp_m, 40, 41)
+        when rp_m > lp_m {
+          hold pi_m = lp_m + 1
+          while pi_m < rp_m {
+            hold pi_m = sxadv_skip_ws(hdr_m, pi_m, rp_m)
+            when pi_m < rp_m && sxadv_id0(sx_index(hdr_m, pi_m)) == 1 {
+              hold pn0 = pi_m
+              while pi_m < rp_m && sxadv_id(sx_index(hdr_m, pi_m)) == 1 {
+                hold pi_m = pi_m + 1
+              }
+              hold fn_known = sxadv_csv_add(fn_known, sxseed_slice(hdr_m, pn0, pi_m))
+            }
+            while pi_m < rp_m && sx_index(hdr_m, pi_m) != 44 {
+              hold pi_m = pi_m + 1
+            }
+            when pi_m < rp_m && sx_index(hdr_m, pi_m) == 44 {
+              hold pi_m = pi_m + 1
+            }
+          }
+        }
+      }
+      hold mctx = "|in_loop=0|trial_rw=|lact=|conv_flag=|conv_var=|conv_prev=|"
+      hold all_g = sxadv_ctx_get(ctx, "top_holds")
+      when len(all_g) > 0 {
+        hold fn_known = concat(all_g, concat(",", fn_known))
+      }
+      hold mctx = sxadv_ctx_put(mctx, "known", fn_known)
+      hold mctx = sxadv_ctx_put(mctx, "top_holds", all_g)
+      hold mbody = sxadv_block(src, bo_m + 1, bc_m, rpriv, state, mctx)
+      give sxadv_res(bc_m + 1, concat(hdr_m, concat("\n", concat(mbody, "}\n"))))
+    }
+    give sxadv_res(b1, "")
+  }
+  hold se_m = sxadv_stmt_end(src, w0, b1)
+  give sxadv_res(se_m, concat(sxseed_slice(src, w0, se_m), "\n"))
+}
+
+make sxadv_do_while(src: str, we: num, b1: num, pctx: str, state: list) -> str {
+  hold priv = sxadv_pre(pctx)
+  hold ctx = sxadv_code(pctx)
+  hold ce_w = sxadv_cond_end(src, we, b1)
+  hold cp_w = sxadv_expr(sxadv_trim(sxseed_slice(src, we, ce_w)), priv, state, "")
+  hold bo_w = sxadv_skip_ws(src, ce_w, b1)
+  when bo_w >= b1 || sx_index(src, bo_w) != 123 {
+    push(state, 6)
+    give sxadv_res(b1, "")
+  }
+  hold bc_w = sxadv_brace_end(src, bo_w)
+  when bc_w < 0 || bc_w >= b1 {
+    push(state, 6)
+    give sxadv_res(b1, "")
+  }
+  hold wctx = sxadv_ctx_put(ctx, "in_loop", "1")
+  hold wctx = sxadv_ctx_put(wctx, "lact", "")
+  hold wctx = sxadv_ctx_put(wctx, "conv_flag", "")
+  hold wbody = sxadv_block(src, bo_w + 1, bc_w, priv, state, wctx)
+  hold wpre = sxadv_pre(cp_w)
+  hold wcond = sxadv_code(cp_w)
+  hold out = ""
+  when len(wpre) == 0 {
+    hold out = concat("while ", concat(wcond, concat(" {\n", concat(wbody, "}\n"))))
+  } otherwise {
+    hold out = concat("while 1 == 1 {\n", concat(wpre, concat("when ", concat(wcond, concat(" {\n} otherwise {\nbreak\n}\n", concat(wbody, "}\n"))))))
+  }
+  hold trw_w = sxadv_ctx_get(ctx, "trial_rw")
+  when len(trw_w) > 0 {
+    hold out = concat(out, concat("when ", concat(trw_w, " == 1 {\nbreak\n}\n")))
+  }
+  give sxadv_res(bc_w + 1, out)
+}
+
+make sxadv_do_for(src: str, we: num, b1: num, pctx: str, state: list) -> str {
+  hold priv = sxadv_pre(pctx)
+  hold ctx = sxadv_code(pctx)
+  hold known = sxadv_ctx_get(ctx, "known")
+  hold ce_f = sxadv_cond_end(src, we, b1)
+  hold hdr_f = sxadv_trim(sxseed_slice(src, we, ce_f))
+  hold fi = 0
+  while fi < len(hdr_f) && sxadv_id(sx_index(hdr_f, fi)) == 1 {
+    hold fi = fi + 1
+  }
+  hold fnm = sxseed_slice(hdr_f, 0, fi)
+  hold fi2 = sxadv_skip_ws(hdr_f, fi, len(hdr_f))
+  hold fe2 = fi2
+  while fe2 < len(hdr_f) && sxadv_id(sx_index(hdr_f, fe2)) == 1 {
+    hold fe2 = fe2 + 1
+  }
+  hold fp = sxadv_expr(sxadv_trim(sxseed_slice(hdr_f, fe2, len(hdr_f))), priv, state, "")
+  hold bo_f = sxadv_skip_ws(src, ce_f, b1)
+  when bo_f >= b1 || sx_index(src, bo_f) != 123 {
+    push(state, 6)
+    give sxadv_res(b1, "")
+  }
+  hold bc_f = sxadv_brace_end(src, bo_f)
+  when bc_f < 0 || bc_f >= b1 {
+    push(state, 6)
+    give sxadv_res(b1, "")
+  }
+  hold fctx = sxadv_ctx_put(ctx, "known", sxadv_csv_add(known, fnm))
+  hold fctx = sxadv_ctx_put(fctx, "in_loop", "1")
+  hold fctx = sxadv_ctx_put(fctx, "lact", "")
+  hold fctx = sxadv_ctx_put(fctx, "conv_flag", "")
+  hold fbody = sxadv_block(src, bo_f + 1, bc_f, priv, state, fctx)
+  hold out = concat(sxadv_pre(fp), concat("for ", concat(fnm, concat(" in ", concat(sxadv_code(fp), concat(" {\n", concat(fbody, "}\n")))))))
+  hold trw_f = sxadv_ctx_get(ctx, "trial_rw")
+  when len(trw_f) > 0 {
+    hold out = concat(out, concat("when ", concat(trw_f, " == 1 {\nbreak\n}\n")))
+  }
+  give sxadv_res(bc_f + 1, out)
+}
+
+make sxadv_do_inv(src: str, we: num, b1: num, pctx: str, state: list) -> str {
+  hold priv = sxadv_pre(pctx)
+  hold ctx = sxadv_code(pctx)
+  hold ie = sxadv_inv_end(src, we, b1)
+  hold ic_raw = sxadv_trim(sxseed_slice(src, we, ie))
+  when len(ic_raw) == 0 {
+    push(state, 7)
+    give sxadv_res(ie, "")
+  }
+  hold ip1 = sxadv_expr(ic_raw, priv, state, "")
+  hold fail_fn = concat(priv, "_fail")
+  hold nx_i = sxadv_skip_ws(src, ie, b1)
+  when nx_i < b1 && sx_index(src, nx_i) == 123 {
+    push(state, 7)
+    give sxadv_res(b1, "")
+  }
+  hold has_i_else = 0
+  hold i_we = nx_i
+  when nx_i < b1 && sxadv_id0(sx_index(src, nx_i)) == 1 {
+    while i_we < b1 && sxadv_id(sx_index(src, i_we)) == 1 {
+      hold i_we = i_we + 1
+    }
+    hold iw = sxseed_slice(src, nx_i, i_we)
+    when string_eq(iw, "otherwise") == 1 || string_eq(iw, "else") == 1 {
+      hold has_i_else = 1
+    }
+  }
+  when has_i_else == 1 {
+    hold bo_i = sxadv_skip_ws(src, i_we, b1)
+    when bo_i >= b1 || sx_index(src, bo_i) != 123 {
+      push(state, 7)
+      give sxadv_res(b1, "")
+    }
+    hold bc_i = sxadv_brace_end(src, bo_i)
+    when bc_i < 0 || bc_i >= b1 {
+      push(state, 7)
+      give sxadv_res(b1, "")
+    }
+    hold rep_body = sxadv_block(src, bo_i + 1, bc_i, priv, state, ctx)
+    hold ip2 = sxadv_expr(ic_raw, priv, state, "")
+    hold d2 = sxadv_next_id(priv, "_u", state)
+    hold call2 = concat(fail_fn, concat("(", concat(chr(34), concat("sx: invariant repair failed\\n", concat(chr(34), ")\n}\n")))))
+    hold chk2 = concat(sxadv_pre(ip2), concat("when ", concat(sxadv_code(ip2), concat(" {\n} otherwise {\nhold ", concat(d2, concat(" = ", call2))))))
+    hold full2 = concat(sxadv_pre(ip1), concat("when ", concat(sxadv_code(ip1), concat(" {\n} otherwise {\n", concat(rep_body, concat(chk2, "}\n"))))))
+    give sxadv_res(bc_i + 1, full2)
+  }
+  hold d1 = sxadv_next_id(priv, "_u", state)
+  hold call1 = concat(fail_fn, concat("(", concat(chr(34), concat("sx: invariant failed\\n", concat(chr(34), ")\n}\n")))))
+  hold full1 = concat(sxadv_pre(ip1), concat("when ", concat(sxadv_code(ip1), concat(" {\n} otherwise {\nhold ", concat(d1, concat(" = ", call1))))))
+  give sxadv_res(ie, full1)
+}
+
+make sxadv_do_conv(src: str, we: num, b1: num, pctx: str, state: list) -> str {
+  hold priv = sxadv_pre(pctx)
+  hold ctx = sxadv_code(pctx)
+  hold vp = sxadv_skip_ws(src, we, b1)
+  hold ve = vp
+  while ve < b1 && sxadv_id(sx_index(src, ve)) == 1 {
+    hold ve = ve + 1
+  }
+  hold cvar = sxseed_slice(src, vp, ve)
+  hold wp = sxadv_skip_ws(src, ve, b1)
+  hold wend = wp
+  while wend < b1 && sxadv_id(sx_index(src, wend)) == 1 {
+    hold wend = wend + 1
+  }
+  hold wkw = sxseed_slice(src, wp, wend)
+  when len(cvar) == 0 || string_eq(wkw, "within") == 0 {
+    push(state, 8)
+    give sxadv_res(b1, "")
+  }
+  hold be_c = sxadv_cond_end(src, wend, b1)
+  hold bp_c = sxadv_expr(sxadv_trim(sxseed_slice(src, wend, be_c)), priv, state, "")
+  hold bo_c = sxadv_skip_ws(src, be_c, b1)
+  when bo_c >= b1 || sx_index(src, bo_c) != 123 {
+    push(state, 8)
+    give sxadv_res(b1, "")
+  }
+  hold bc_c = sxadv_brace_end(src, bo_c)
+  when bc_c < 0 || bc_c >= b1 {
+    push(state, 8)
+    give sxadv_res(b1, "")
+  }
+  hold crem = sxadv_next_id(priv, "_rem", state)
+  hold cflg = sxadv_next_id(priv, "_cv", state)
+  hold cprv = sxadv_next_id(priv, "_prv", state)
+  hold cctx2 = sxadv_ctx_put(ctx, "in_loop", "1")
+  hold cctx2 = sxadv_ctx_put(cctx2, "lact", "")
+  hold cctx2 = sxadv_ctx_put(cctx2, "conv_flag", cflg)
+  hold cctx2 = sxadv_ctx_put(cctx2, "conv_var", cvar)
+  hold cctx2 = sxadv_ctx_put(cctx2, "conv_prev", cprv)
+  hold cbody = sxadv_block(src, bo_c + 1, bc_c, priv, state, cctx2)
+  hold out = sxadv_pre(bp_c)
+  hold out = concat(out, concat("hold ", concat(crem, concat(" = (", concat(sxadv_code(bp_c), ") + 0\n")))))
+  hold out = concat(out, concat("hold ", concat(cflg, " = 0\n")))
+  hold out = concat(out, concat("while ", concat(crem, " > 0 {\n")))
+  hold out = concat(out, concat("hold ", concat(crem, concat(" = ", concat(crem, " - 1\n")))))
+  hold out = concat(out, concat("hold ", concat(cprv, concat(" = ", concat(cvar, "\n")))))
+  hold out = concat(out, cbody)
+  hold out = concat(out, concat("when ", concat(cvar, concat(" == ", concat(cprv, " {\n")))))
+  hold out = concat(out, concat("hold ", concat(cflg, " = 1\nbreak\n}\n}\n")))
+  hold trw_c = sxadv_ctx_get(ctx, "trial_rw")
+  when len(trw_c) > 0 {
+    hold out = concat(out, concat("when ", concat(trw_c, " == 1 {\nbreak\n}\n")))
+  }
+  hold cur_p = bc_c + 1
+  hold nx_c = sxadv_skip_ws(src, cur_p, b1)
+  when nx_c < b1 && sxadv_id0(sx_index(src, nx_c)) == 1 {
+    hold cwe = nx_c
+    while cwe < b1 && sxadv_id(sx_index(src, cwe)) == 1 {
+      hold cwe = cwe + 1
+    }
+    hold cw = sxseed_slice(src, nx_c, cwe)
+    when string_eq(cw, "otherwise") == 1 || string_eq(cw, "else") == 1 {
+      hold cbo2 = sxadv_skip_ws(src, cwe, b1)
+      when cbo2 >= b1 || sx_index(src, cbo2) != 123 {
+        push(state, 8)
+        give sxadv_res(b1, out)
+      }
+      hold cbc2 = sxadv_brace_end(src, cbo2)
+      when cbc2 < 0 || cbc2 >= b1 {
+        push(state, 8)
+        give sxadv_res(b1, out)
+      }
+      hold obody_c = sxadv_block(src, cbo2 + 1, cbc2, priv, state, ctx)
+      hold out = concat(out, concat("when ", concat(cflg, concat(" == 0 {\n", concat(obody_c, "}\n")))))
+      hold cur_p = cbc2 + 1
+    }
+  }
+  give sxadv_res(cur_p, out)
+}
+
+make sxadv_do_trial(src: str, we: num, b1: num, pctx: str, state: list) -> str {
+  hold priv = sxadv_pre(pctx)
+  hold ctx = sxadv_code(pctx)
+  hold known = sxadv_ctx_get(ctx, "known")
+  hold bo_t = sxadv_skip_ws(src, we, b1)
+  when bo_t >= b1 || sx_index(src, bo_t) != 123 {
+    push(state, 9)
+    give sxadv_res(b1, "")
+  }
+  hold bc_t = sxadv_brace_end(src, bo_t)
+  when bc_t < 0 || bc_t >= b1 {
+    push(state, 9)
+    give sxadv_res(b1, "")
+  }
+  hold muts = sxadv_scan_muts(sxseed_slice(src, bo_t + 1, bc_t), known, state)
+  hold trw = sxadv_next_id(priv, "_rw", state)
+  hold tonce = sxadv_next_id(priv, "_to", state)
+  hold parent_loop = sxadv_ctx_get(ctx, "in_loop")
+  hold parent_lact = sxadv_ctx_get(ctx, "lact")
+  hold my_lact = ""
+  when string_eq(parent_loop, "1") == 1 || len(parent_lact) > 0 {
+    hold my_lact = sxadv_next_id(priv, "_la", state)
+  }
+  hold baks_save = ""
+  hold baks_rest = ""
+  hold mi = 0
+  hold mitem = ""
+  while mi <= len(muts) {
+    hold mc = 44
+    when mi < len(muts) {
+      hold mc = sx_index(muts, mi)
+    }
+    when mc == 44 {
+      when len(mitem) > 0 {
+        hold bvar = sxadv_next_id(priv, "_bk", state)
+        hold baks_save = concat(baks_save, concat("when 0 == 1 {\nwhen ", concat(mitem, concat(" == ", concat(mitem, " {\n}\n}\n")))))
+        hold baks_save = concat(baks_save, concat("hold ", concat(bvar, concat(" = ", concat(mitem, "\n")))))
+        hold baks_rest = concat(baks_rest, concat(mitem, concat(" = ", concat(bvar, "\n"))))
+        hold mitem = ""
+      }
+    } otherwise {
+      hold mitem = concat(mitem, chr(mc))
+    }
+    hold mi = mi + 1
+  }
+  hold tctx = sxadv_ctx_put(ctx, "trial_rw", trw)
+  hold tctx = sxadv_ctx_put(tctx, "in_loop", "0")
+  hold tctx = sxadv_ctx_put(tctx, "lact", my_lact)
+  hold tctx = sxadv_ctx_put(tctx, "conv_flag", "")
+  hold tbody = sxadv_block(src, bo_t + 1, bc_t, priv, state, tctx)
+  hold out = concat(baks_save, concat("hold ", concat(trw, " = 0\n")))
+  when len(my_lact) > 0 {
+    hold out = concat(out, concat("hold ", concat(my_lact, " = 0\n")))
+  }
+  hold out = concat(out, concat("hold ", concat(tonce, " = 1\nwhile ")))
+  hold out = concat(out, concat(tonce, concat(" == 1 {\nhold ", concat(tonce, concat(" = 0\n", concat(tbody, "}\n"))))))
+  hold cur_p = bc_t + 1
+  hold to_body = ""
+  hold nx_t = sxadv_skip_ws(src, cur_p, b1)
+  when nx_t < b1 && sxadv_id0(sx_index(src, nx_t)) == 1 {
+    hold twe = nx_t
+    while twe < b1 && sxadv_id(sx_index(src, twe)) == 1 {
+      hold twe = twe + 1
+    }
+    hold tw_kw = sxseed_slice(src, nx_t, twe)
+    when string_eq(tw_kw, "otherwise") == 1 || string_eq(tw_kw, "else") == 1 {
+      hold tbo2 = sxadv_skip_ws(src, twe, b1)
+      when tbo2 >= b1 || sx_index(src, tbo2) != 123 {
+        push(state, 9)
+        give sxadv_res(b1, out)
+      }
+      hold tbc2 = sxadv_brace_end(src, tbo2)
+      when tbc2 < 0 || tbc2 >= b1 {
+        push(state, 9)
+        give sxadv_res(b1, out)
+      }
+      hold to_body = sxadv_block(src, tbo2 + 1, tbc2, priv, state, ctx)
+      hold cur_p = tbc2 + 1
+    }
+  }
+  hold out = concat(out, concat("when ", concat(trw, concat(" == 1 {\n", concat(baks_rest, concat(to_body, "}\n"))))))
+  when len(my_lact) > 0 {
+    when string_eq(parent_loop, "1") == 1 {
+      hold pcflg = sxadv_ctx_get(ctx, "conv_flag")
+      when len(pcflg) > 0 {
+        hold pcvar = sxadv_ctx_get(ctx, "conv_var")
+        hold pcprv = sxadv_ctx_get(ctx, "conv_prev")
+        hold out = concat(out, concat("when ", concat(my_lact, concat(" == 1 {\nhold ", concat(pcflg, " = 2\nbreak\n}\n")))))
+        hold cc_chk = concat("when ", concat(pcvar, concat(" == ", concat(pcprv, concat(" {\nhold ", concat(pcflg, " = 1\nbreak\n}\ncontinue\n}\n"))))))
+        hold out = concat(out, concat("when ", concat(my_lact, concat(" == 2 {\n", cc_chk))))
+      } otherwise {
+        hold out = concat(out, concat("when ", concat(my_lact, " == 1 {\nbreak\n}\nwhen ")))
+        hold out = concat(out, concat(my_lact, " == 2 {\ncontinue\n}\n"))
+      }
+    } otherwise {
+      hold out = concat(out, concat("when ", concat(my_lact, concat(" != 0 {\nhold ", concat(parent_lact, concat(" = ", concat(my_lact, "\nbreak\n}\n")))))))
+    }
+  }
+  give sxadv_res(cur_p, out)
+}
+
+make sxadv_do_assign(stmt_raw: str, priv: str, state: list) -> str {
+  hold ai = 0
+  hold adepth = 0
+  hold eq_at = 0 - 1
+  hold sn = len(stmt_raw)
+  while ai < sn && eq_at < 0 {
+    hold ac = sx_index(stmt_raw, ai)
+    when ac == 34 {
+      hold ai = ai + 1
+      hold aq = 1
+      while ai < sn && aq == 1 {
+        when sx_index(stmt_raw, ai) == 92 {
+          hold ai = ai + 2
+        } otherwise {
+          when sx_index(stmt_raw, ai) == 34 {
+            hold aq = 0
+          }
+          hold ai = ai + 1
+        }
+      }
+    } otherwise {
+      when ac == 40 || ac == 91 || ac == 123 {
+        hold adepth = adepth + 1
+        hold ai = ai + 1
+      } otherwise {
+        when ac == 41 || ac == 93 || ac == 125 {
+          when adepth > 0 {
+            hold adepth = adepth - 1
+          }
+          hold ai = ai + 1
+        } otherwise {
+          when adepth == 0 && ac == 61 {
+            hold next_eq = 0
+            when ai + 1 < sn && sx_index(stmt_raw, ai + 1) == 61 {
+              hold next_eq = 1
+            }
+            hold prev_rel = 0
+            when ai > 0 {
+              hold pc = sx_index(stmt_raw, ai - 1)
+              when pc == 33 || pc == 60 || pc == 62 {
+                hold prev_rel = 1
+              }
+            }
+            when next_eq == 0 && prev_rel == 0 {
+              hold eq_at = ai
+            }
+          }
+          hold ai = ai + 1
+        }
+      }
+    }
+  }
+  when eq_at >= 0 {
+    hold lhs_part = sxseed_slice(stmt_raw, 0, eq_at + 1)
+    hold rhs_part = sxadv_trim(sxseed_slice(stmt_raw, eq_at + 1, sn))
+    hold lb_at = 0 - 1
+    hold li_a = 0
+    while li_a < eq_at && lb_at < 0 {
+      when sx_index(lhs_part, li_a) == 91 {
+        hold lb_at = li_a
+      }
+      hold li_a = li_a + 1
+    }
+    hold pre_lhs = ""
+    when lb_at >= 0 {
+      hold rb_at = sxadv_close_delim(lhs_part, lb_at, 91, 93)
+      when rb_at > lb_at {
+        hold idx_p = sxadv_expr(sxadv_trim(sxseed_slice(lhs_part, lb_at + 1, rb_at)), priv, state, "")
+        hold pre_lhs = sxadv_pre(idx_p)
+        hold lhs_part = concat(sxseed_slice(lhs_part, 0, lb_at + 1), concat(sxadv_code(idx_p), sxseed_slice(lhs_part, rb_at, len(lhs_part))))
+      }
+    }
+    hold rp_a = sxadv_expr(rhs_part, priv, state, "")
+    give concat(pre_lhs, concat(sxadv_pre(rp_a), concat(lhs_part, concat(" ", concat(sxadv_code(rp_a), "\n")))))
+  }
+  hold rp_b = sxadv_expr(sxadv_trim(stmt_raw), priv, state, "")
+  give concat(sxadv_pre(rp_b), concat(sxadv_code(rp_b), "\n"))
+}
+
+make sxadv_do_brk(kw: str, ctx: str) -> str {
+  hold is_brk = string_eq(kw, "break")
+  hold in_lp = sxadv_ctx_get(ctx, "in_loop")
+  hold lact_b = sxadv_ctx_get(ctx, "lact")
+  hold cflg_b = sxadv_ctx_get(ctx, "conv_flag")
+  when string_eq(in_lp, "1") == 1 {
+    when len(cflg_b) > 0 {
+      when is_brk == 1 {
+        give concat("hold ", concat(cflg_b, " = 2\nbreak\n"))
+      }
+      hold cv_b = sxadv_ctx_get(ctx, "conv_var")
+      hold cp_b = sxadv_ctx_get(ctx, "conv_prev")
+      give concat("when ", concat(cv_b, concat(" == ", concat(cp_b, concat(" {\nhold ", concat(cflg_b, " = 1\nbreak\n}\ncontinue\n"))))))
+    }
+    give concat(kw, "\n")
+  }
+  when len(lact_b) > 0 {
+    hold code_b = "2"
+    when is_brk == 1 {
+      hold code_b = "1"
+    }
+    give concat("hold ", concat(lact_b, concat(" = ", concat(code_b, "\nbreak\n"))))
+  }
+  give concat(kw, "\n")
+}
+
+make sxadv_block(src: str, b0: num, b1: num, priv: str, state: list, ctx: str) -> str {
+  hold out = ""
+  hold chunk = ""
+  hold known = sxadv_ctx_get(ctx, "known")
+  hold p = b0
+  while p < b1 {
+    hold p = sxadv_skip_ws(src, p, b1)
+    when p < b1 {
+      hold c = sx_index(src, p)
+      hold handled = 0
+      when sxadv_id0(c) == 1 {
+        hold w0 = p
+        hold we = p
+        while we < b1 && sxadv_id(sx_index(src, we)) == 1 {
+          hold we = we + 1
+        }
+        hold kw = sxseed_slice(src, w0, we)
+        hold cctx = sxadv_ctx_put(ctx, "known", known)
+        hold pctx = sxadv_pair(priv, cctx)
+        hold r = ""
+
+        when string_eq(kw, "struct") == 1 {
+          hold handled = 1
+          hold bo = sxadv_cond_end(src, we, b1)
+          when bo < b1 && sx_index(src, bo) == 123 {
+            hold bc = sxadv_brace_end(src, bo)
+            when bc > bo {
+              hold chunk = concat(chunk, concat(sxseed_slice(src, w0, bc + 1), "\n"))
+              hold p = bc + 1
+            } otherwise {
+              hold p = b1
+            }
+          } otherwise {
+            hold se0 = sxadv_stmt_end(src, w0, b1)
+            hold chunk = concat(chunk, concat(sxseed_slice(src, w0, se0), "\n"))
+            hold p = se0
+          }
+        }
+        when handled == 0 && string_eq(kw, "make") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_make(src, w0, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "when") == 1 {
+          hold handled = 1
+          hold r = sxadv_when_chain(src, we, b1, priv, state, cctx)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, concat(sxadv_code(r), "\n"))
+        }
+        when handled == 0 && string_eq(kw, "while") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_while(src, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "for") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_for(src, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "invariant") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_inv(src, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "converge") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_conv(src, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "trial") == 1 {
+          hold handled = 1
+          hold r = sxadv_do_trial(src, we, b1, pctx, state)
+          hold p = strnum_adv(sxadv_pre(r))
+          hold chunk = concat(chunk, sxadv_code(r))
+        }
+        when handled == 0 && string_eq(kw, "rewind") == 1 {
+          hold handled = 1
+          hold trw_r = sxadv_ctx_get(cctx, "trial_rw")
+          when len(trw_r) == 0 {
+            push(state, 4)
+          } otherwise {
+            hold chunk = concat(chunk, concat("hold ", concat(trw_r, " = 1\nbreak\n")))
+          }
+          hold p = sxadv_stmt_end(src, w0, b1)
+        }
+        when handled == 0 && (string_eq(kw, "break") == 1 || string_eq(kw, "continue") == 1) {
+          hold handled = 1
+          hold chunk = concat(chunk, sxadv_do_brk(kw, cctx))
+          hold p = sxadv_stmt_end(src, w0, b1)
+        }
+        when handled == 0 && (string_eq(kw, "hold") == 1 || string_eq(kw, "show") == 1 || string_eq(kw, "give") == 1 || string_eq(kw, "use") == 1) {
+          hold handled = 1
+          hold se_h = sxadv_stmt_end(src, w0, b1)
+          when string_eq(kw, "use") == 1 {
+            hold chunk = concat(chunk, concat(sxseed_slice(src, w0, se_h), "\n"))
+          } otherwise {
+            when string_eq(kw, "hold") == 1 {
+              hold hp = sxadv_skip_ws(src, we, se_h)
+              hold he = hp
+              while he < se_h && sxadv_id(sx_index(src, he)) == 1 {
+                hold he = he + 1
+              }
+              hold hnm = sxseed_slice(src, hp, he)
+              hold eq_h = he
+              while eq_h < se_h && sx_index(src, eq_h) != 61 {
+                hold eq_h = eq_h + 1
+              }
+              when eq_h < se_h {
+                hold rp_h = sxadv_expr(sxadv_trim(sxseed_slice(src, eq_h + 1, se_h)), priv, state, "")
+                hold chunk = concat(chunk, concat(sxadv_pre(rp_h), concat(sxseed_slice(src, w0, eq_h + 1), concat(" ", concat(sxadv_code(rp_h), "\n")))))
+              } otherwise {
+                hold chunk = concat(chunk, concat(sxseed_slice(src, w0, se_h), "\n"))
+              }
+              hold known = sxadv_csv_add(known, hnm)
+            } otherwise {
+              hold rp_sg = sxadv_expr(sxadv_trim(sxseed_slice(src, we, se_h)), priv, state, "")
+              hold chunk = concat(chunk, concat(sxadv_pre(rp_sg), concat(kw, concat(" ", concat(sxadv_code(rp_sg), "\n")))))
+            }
+          }
+          hold p = se_h
+        }
+        when handled == 0 {
+          hold handled = 1
+          hold se_a = sxadv_stmt_end(src, w0, b1)
+          hold chunk = concat(chunk, sxadv_do_assign(sxseed_slice(src, w0, se_a), priv, state))
+          hold p = se_a
+        }
+      }
+      when handled == 0 {
+        hold se_u = sxadv_stmt_end(src, p, b1)
+        when se_u <= p {
+          hold chunk = concat(chunk, chr(c))
+          hold p = p + 1
+        } otherwise {
+          hold rp_u = sxadv_expr(sxadv_trim(sxseed_slice(src, p, se_u)), priv, state, "")
+          hold chunk = concat(chunk, concat(sxadv_pre(rp_u), concat(sxadv_code(rp_u), "\n")))
+          hold p = se_u
+        }
+      }
+      when len(chunk) >= 1024 {
+        hold out = concat(out, chunk)
+        hold chunk = ""
+      }
+    }
+  }
+  give concat(out, chunk)
+}
+
+make sxadv_top_holds(text: str) -> str {
+  hold n = len(text)
+  hold csv = ""
+  hold p = 0
+  hold depth = 0
+  while p < n {
+    hold c = sx_index(text, p)
+    when c == 34 {
+      hold p = p + 1
+      hold q = 1
+      while p < n && q == 1 {
+        when sx_index(text, p) == 92 {
+          hold p = p + 2
+        } otherwise {
+          when sx_index(text, p) == 34 {
+            hold q = 0
+          }
+          hold p = p + 1
+        }
+      }
+    } otherwise {
+      when c == 47 && p + 1 < n && sx_index(text, p + 1) == 47 {
+        while p < n && sx_index(text, p) != 10 {
+          hold p = p + 1
+        }
+      } otherwise {
+        when c == 123 {
+          hold depth = depth + 1
+          hold p = p + 1
+        } otherwise {
+          when c == 125 {
+            when depth > 0 {
+              hold depth = depth - 1
+            }
+            hold p = p + 1
+          } otherwise {
+            when depth == 0 && sxadv_id0(c) == 1 {
+              hold w0 = p
+              while p < n && sxadv_id(sx_index(text, p)) == 1 {
+                hold p = p + 1
+              }
+              when sxadv_word_is(text, w0, p, "hold") == 1 {
+                while p < n && (sx_index(text, p) == 32 || sx_index(text, p) == 9) {
+                  hold p = p + 1
+                }
+                when p < n && sxadv_id0(sx_index(text, p)) == 1 {
+                  hold v0 = p
+                  while p < n && sxadv_id(sx_index(text, p)) == 1 {
+                    hold p = p + 1
+                  }
+                  hold csv = sxadv_csv_add(csv, sxseed_slice(text, v0, p))
+                }
+              }
+            } otherwise {
+              hold p = p + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  give csv
+}
+
+make sxadvance_lower(text: str, priv: str, state: list) -> str {
+  when sxadv_has_any(text) == 0 {
+    give text
+  }
+  push(state, 1)
+  hold th = sxadv_top_holds(text)
+  hold ctx = "|known=|in_loop=0|trial_rw=|lact=|conv_flag=|conv_var=|conv_prev=|"
+  hold ctx = sxadv_ctx_put(ctx, "top_holds", th)
+  give sxadv_block(text, 0, len(text), priv, state, ctx)
+}
+

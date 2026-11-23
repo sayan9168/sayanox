@@ -1,0 +1,14 @@
+sxdbg: at src 0x00004a (ip 0/134, depth 0)
+sxdbg: break at ip 7 (line 5, src 0x00007a) if DI == 2
+sxdbg: breakpoints: 7 (if DI == 2)
+sxdbg: at src 0x00007a (ip 7/134, depth 3)
+sxdbg: line 5: make fact(n: num) -> num {
+sxdbg: DI = 0x4000000000000000 (0)
+2
+3
+sxdbg: at src 0x00007a (ip 7/134, depth 4)
+sxdbg: line 5: make fact(n: num) -> num {
+sxdbg: DI = 0x4000000000000000 (0)
+2
+9
+sxdbg: end of program after 365 instructions and 3 stops

@@ -17,6 +17,10 @@ limits are maintained in [`STATUS.md`](STATUS.md); reproduce them with
 | Strings | literals, `concat`, `len`, `chr`, `string_eq`, indexing | yes | yes | yes |
 | File and argument builtins | `read_file`, `write_file`, `arg`, `arg_count` | yes | yes | yes |
 | Modules | `use "file.sa"` textual splice | yes | yes | yes (bounded nesting) |
+| Value pipelines | `x \|> f(a) \|> g(1, _, 2)` | yes (`--seed-profile`) | yes | yes (x86-64, i386, arm64, riscv64, IR VM) |
+| Lexical state transactions | `trial { ... rewind } otherwise { ... }` | yes (`--seed-profile`) | yes | yes (x86-64, i386, arm64, riscv64, IR VM) |
+| Bounded fixed-point loops | `converge x within N { ... } otherwise { ... }` | yes (`--seed-profile`) | yes | yes (x86-64, i386, arm64, riscv64, IR VM) |
+| Self-healing invariants | `invariant cond otherwise { ... }` | yes (`--seed-profile`) | yes | yes (x86-64, i386, arm64, riscv64, IR VM) |
 
 All rows mean the tested language subset; backend-specific errors and
 extensions are listed in [`STATUS.md`](STATUS.md). In particular, the native

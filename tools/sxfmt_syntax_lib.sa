@@ -377,9 +377,23 @@ make sf_format(source: str) -> str {
                   in_comment = 1
                   pos = pos + 1
                 } otherwise {
-                  content = sf_put(content, gap, c)
-                  gap = 0
-                  non_closer = 1
+                  when c == 124 && pos + 1 < n && sx_index(source, pos + 1) == 62 {
+                    hold prev_p = 0
+                    when len(content) > 0 {
+                      prev_p = sx_index(content, len(content) - 1)
+                    }
+                    when len(content) > 0 && sf_space_allowed(prev_p, 124) == 1 {
+                      content = concat(content, " ")
+                    }
+                    content = concat(content, "|>")
+                    gap = 1
+                    non_closer = 1
+                    pos = pos + 1
+                  } otherwise {
+                    content = sf_put(content, gap, c)
+                    gap = 0
+                    non_closer = 1
+                  }
                 }
               }
             }

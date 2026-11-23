@@ -52,6 +52,32 @@ make write_link_dump_dir(dir: str, code: list, data: list, patch: list, meta_txt
   give 0
 }
 
+make flush_line_map_file(path: str, src: str, lp_st: list) -> num {
+  hold out = ""
+  hold chunk = ""
+  hold n = len(lp_st)
+  hold i = 0
+  while i + 2 < n {
+    when lp_st[i + 1] == 9 {
+      hold row = concat(hex_off6(lp_st[i]), concat(" ", concat(istr(lp_st[i + 2]), "\n")))
+      chunk = concat(chunk, row)
+      when len(chunk) >= 2048 {
+        out = concat(out, chunk)
+        chunk = ""
+      }
+    }
+    i = i + 3
+  }
+  out = concat(out, chunk)
+  when write_file(path, out) != 1 {
+    hold e1 = fail(1, concat("cannot write SX_LINE_MAP file ", path))
+  }
+  when write_file(concat(path, ".src"), src) != 1 {
+    hold e2 = fail(1, concat("cannot write SX_LINE_MAP source ", concat(path, ".src")))
+  }
+  give 0
+}
+
 make compile_native_aot(in_path: str, out_path: str) -> num {
   hold neg1 = 0 - 1
   hold ilog_env = getenv("SX_EMIT_LOG")
@@ -114,6 +140,12 @@ make compile_native_aot(in_path: str, out_path: str) -> num {
   est = xor_rr(est, 0, 0)
   est = rep_stosq_inst(est)
 
+  hold lmap_env = getenv("SX_LINE_MAP")
+  hold lmap_on = 0
+  when len(lmap_env) > 0 {
+    lmap_on = 1
+  }
+
   // Phase 3b: top-level statements
   est = ilogc(est, "=== phase: top level ===")
   hold lp_st = []
@@ -125,6 +157,9 @@ make compile_native_aot(in_path: str, out_path: str) -> num {
   st[33] = 0
   st[34] = 0
   st[35] = 0
+  st[45] = lmap_on
+  st[46] = 0
+  st[47] = 1
   est = emit_prog(src, st, pool, est, data, lp_st, 0, 0)
 
   // Phase 3c: exit(0) syscall
@@ -231,6 +266,9 @@ make compile_native_aot(in_path: str, out_path: str) -> num {
       hold eel2 = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
     }
   }
+  when lmap_on == 1 {
+    hold flm = flush_line_map_file(lmap_env, src, lp_st)
+  }
   give 0
 }
 
@@ -302,6 +340,12 @@ make compile_native_aot_full_raw(in_path: str, raw: str, out_path: str) -> num {
   est = xor_rr(est, 0, 0)
   est = rep_stosq_inst(est)
 
+  hold lmap_env = getenv("SX_LINE_MAP")
+  hold lmap_on = 0
+  when len(lmap_env) > 0 {
+    lmap_on = 1
+  }
+
   // Phase 3b: top-level statements
   est = ilogc(est, "=== phase: top level ===")
   hold lp_st = []
@@ -313,6 +357,9 @@ make compile_native_aot_full_raw(in_path: str, raw: str, out_path: str) -> num {
   st[33] = 0
   st[34] = 0
   st[35] = 0
+  st[45] = lmap_on
+  st[46] = 0
+  st[47] = 1
   est = emit_prog(src, st, pool, est, data, lp_st, 0, 0)
 
   // Phase 3c: exit(0) syscall
@@ -420,6 +467,9 @@ make compile_native_aot_full_raw(in_path: str, raw: str, out_path: str) -> num {
     when write_bytes(elog_env, el_bytes) != 1 {
       hold eel2 = fail(1, concat("cannot open SX_ENCODE_LOG file ", elog_env))
     }
+  }
+  when lmap_on == 1 {
+    hold flm2 = flush_line_map_file(lmap_env, src, lp_st)
   }
   give 0
 }
