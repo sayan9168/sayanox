@@ -1979,6 +1979,580 @@ make t_arm_isa_mul_elf() -> list {
   give t_elf64(code, data, 183)
 }
 
+// ---- AArch64 divide probe -------------------------------------------------
+// The gap this closes: block 6 read only the low halves of Rn and Rm, divided
+// with the 32-bit helpers and wrote through set_arm_w, so UDIV/SDIV with sf = 1
+// answered below 2^32 and dropped the sign of a negative 64-bit quotient. The
+// probe below is not a list of magic words. One row per case spells the
+// dividend, the divisor and the expected quotient as hex text; t_dv_uq computes
+// the quotient again from the operands alone, bit by bit from bit 63 down with a
+// base-2^16 multiply and compare, and holds it to its own definition
+// (q * d + r must be the dividend and r must sit below the divisor). A row that
+// stops matching its operands fails the harness instead of pinning a wrong
+// answer, and the emitted image is what the emulator is then judged on.
+// ---- AArch64 divide probe: hex table, model, encoder ------------------------
+// The language has no hex literal, and a number cannot hold 2^64-1 exactly, so
+// the table spells every operand as hex text. t_div_hex turns the text into
+// four 16-bit limbs; anything over 16 digits, and anything that is not a hex
+// digit, is a hard failure rather than a silently truncated operand.
+make t_div_hex(s: str, out: list) -> num {
+  hold pow = [1, 16, 256, 4096]
+  hold i = len(s) - 1
+  hold k = 0
+  while i >= 0 {
+    hold c = sx_index(s, i)
+    hold d = 0 - 1
+    when c >= 48 && c <= 57 {
+      d = c - 48
+    }
+    when c >= 97 && c <= 102 {
+      d = c - 87
+    }
+    when c >= 65 && c <= 70 {
+      d = c - 55
+    }
+    when d < 0 {
+      give 1
+    }
+    hold limb = shr(k, 2)
+    when limb > 3 {
+      give 1
+    }
+    out[limb] = out[limb] + d * pow[bit_and(k, 3)]
+    k = k + 1
+    i = i - 1
+  }
+  give 0
+}
+
+// Base-2^16 limbs, eight of them. A 64-bit value lives in limbs 0..3 and a
+// 64x64 product needs all eight, so the model never has to shift or hold a
+// 64-bit number as one value.
+make t_dv_set(a: list, lo: num, hi: num) -> num {
+  a[0] = bit_and(lo, 65535)
+  a[1] = shr(lo, 16)
+  a[2] = bit_and(hi, 65535)
+  a[3] = shr(hi, 16)
+  a[4] = 0
+  a[5] = 0
+  a[6] = 0
+  a[7] = 0
+  give 0
+}
+
+make t_dv_mul(a: list, b: list, out: list) -> num {
+  hold i = 0
+  while i < 8 {
+    out[i] = 0
+    i = i + 1
+  }
+  i = 0
+  while i < 4 {
+    hold j = 0
+    while j < 4 {
+      hold add = out[i + j] + a[i] * b[j]
+      hold keep = bit_and(add, 65535)
+      out[i + j] = keep
+      hold c = (add - keep) / 65536
+      hold k = i + j + 1
+      while c > 0 && k < 8 {
+        hold s = out[k] + c
+        hold sk = bit_and(s, 65535)
+        out[k] = sk
+        c = (s - sk) / 65536
+        k = k + 1
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+// Compare over all eight limbs: 1 when a is above b, -1 below, 0 equal.
+make t_dv_cmp(a: list, b: list) -> num {
+  hold i = 7
+  while i >= 0 {
+    when a[i] > b[i] {
+      give 1
+    }
+    when a[i] < b[i] {
+      give 0 - 1
+    }
+    i = i - 1
+  }
+  give 0
+}
+
+// a -= b over eight limbs. A borrow past limb 7 is dropped on purpose: an
+// underflow leaves a wrapped remainder, which is exactly what makes the r < d
+// check in t_dv_uq reject a quotient that is too large.
+make t_dv_sub(a: list, b: list) -> num {
+  hold borrow = 0
+  hold i = 0
+  while i < 8 {
+    hold d = a[i] - b[i] - borrow
+    when d < 0 {
+      d = d + 65536
+      borrow = 1
+    } otherwise {
+      borrow = 0
+    }
+    a[i] = d
+    i = i + 1
+  }
+  give 0
+}
+
+make t_dv_or_bit(a: list, k: num) -> num {
+  a[shr(k, 4)] = a[shr(k, 4)] + shl(1, bit_and(k, 15))
+  give 0
+}
+
+// t_dv_uq: quotient and remainder of an unsigned 64-bit divide, found by
+// binary search on the answer with multiply and compare only -- no shift of a
+// 64-bit value, and no shared code with the emulator's restoring divide. The
+// result is then held to its own definition: q*d + r must be the dividend and
+// r must be below the divisor, so a bug here fails the gate instead of pinning
+// a wrong expectation into the fixture. A zero divisor answers 0, which is the
+// architectured result for UDIV and SDIV alike.
+make t_dv_uq(nlo: num, nhi: num, dlo: num, dhi: num, q: list, r: list) -> num {
+  hold n8 = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold zn = t_dv_set(n8, nlo, nhi)
+  hold d8 = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold zd = t_dv_set(d8, dlo, dhi)
+  hold cand = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold tryv = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold prod = [0, 0, 0, 0, 0, 0, 0, 0]
+  when dlo != 0 || dhi != 0 {
+    hold k = 63
+    while k >= 0 {
+      hold i = 0
+      while i < 8 {
+        tryv[i] = cand[i]
+        i = i + 1
+      }
+      hold zb = t_dv_or_bit(tryv, k)
+      hold zm = t_dv_mul(tryv, d8, prod)
+      when t_dv_cmp(prod, n8) <= 0 {
+        hold i2 = 0
+        while i2 < 8 {
+          cand[i2] = tryv[i2]
+          i2 = i2 + 1
+        }
+      }
+      k = k - 1
+    }
+  }
+  hold rem = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold i3 = 0
+  while i3 < 8 {
+    rem[i3] = n8[i3]
+    i3 = i3 + 1
+  }
+  hold zpm = t_dv_mul(cand, d8, prod)
+  hold zs = t_dv_sub(rem, prod)
+  when rem[4] != 0 || rem[5] != 0 || rem[6] != 0 || rem[7] != 0 {
+    give 1
+  }
+  hold rd = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold i4 = 0
+  while i4 < 8 {
+    rd[i4] = rem[i4]
+    i4 = i4 + 1
+  }
+  when dlo == 0 && dhi == 0 {
+    r[0] = nlo
+    r[1] = nhi
+    q[0] = 0
+    q[1] = 0
+    give 0
+  }
+  when t_dv_cmp(rd, d8) >= 0 {
+    give 1
+  }
+  q[0] = cand[0] + cand[1] * 65536
+  q[1] = cand[2] + cand[3] * 65536
+  r[0] = rem[0] + rem[1] * 65536
+  r[1] = rem[2] + rem[3] * 65536
+  give 0
+}
+
+make t_dv_w32(v: num) -> num {
+  give bit_and(v, 4294967295)
+}
+
+make t_dv_neg4(lo: num, hi: num, out: list) -> num {
+  hold l = t_dv_w32(bit_xor(lo, 4294967295) + 1)
+  hold h = t_dv_w32(bit_xor(hi, 4294967295))
+  when l == 0 {
+    h = t_dv_w32(h + 1)
+  }
+  out[0] = l
+  out[1] = h
+  give 0
+}
+
+// t_dv_sq: the signed form, by magnitudes. Both operands are negated into
+// their absolute values, divided unsigned, and the quotient is negated back
+// when the signs differed, which is what makes the division truncate toward
+// zero. INT64_MIN / -1 needs no clause of its own: the wrapping negate of 2^63
+// is 2^63 again, the architectured saturating answer.
+make t_dv_sq(nlo: num, nhi: num, dlo: num, dhi: num, q: list) -> num {
+  hold nneg = shr(nhi, 31)
+  hold dneg = shr(dhi, 31)
+  hold an = [0, 0]
+  hold ad = [0, 0]
+  when nneg == 1 {
+    hold z1 = t_dv_neg4(nlo, nhi, an)
+  } otherwise {
+    an[0] = nlo
+    an[1] = nhi
+  }
+  when dneg == 1 {
+    hold z2 = t_dv_neg4(dlo, dhi, ad)
+  } otherwise {
+    ad[0] = dlo
+    ad[1] = dhi
+  }
+  hold rr = [0, 0]
+  hold bad = t_dv_uq(an[0], an[1], ad[0], ad[1], q, rr)
+  when bad != 0 {
+    give 1
+  }
+  when nneg != dneg {
+    hold nq = [0, 0]
+    hold z3 = t_dv_neg4(q[0], q[1], nq)
+    q[0] = nq[0]
+    q[1] = nq[1]
+  }
+  give 0
+}
+
+// The encoders, spelled as the field sums the fixture's existing images use.
+make t_div_movz64(rd: num, imm: num) -> num {
+  give 3531603968 + imm * 32 + rd
+}
+
+make t_div_movk64(rd: num, imm: num, hw: num) -> num {
+  give 4070572032 + (hw - 1) * 2097152 + imm * 32 + rd
+}
+
+make t_div_movz32(rd: num, imm: num) -> num {
+  give 1384120320 + imm * 32 + rd
+}
+
+// UDIV / SDIV: sf, then bits 30:21 = 0x0D6, Rm, the S bit, Rn, Rd.
+make t_div_enc(rd: num, rn: num, rm: num, sdiv: num, sf: num) -> num {
+  give sf * 2147483648 + 448792576 + rm * 65536 + sdiv * 1024 + rn * 32 + rd
+}
+
+make t_div_cmpx(rn: num, rm: num) -> num {
+  give 3942645791 + rm * 65536 + rn * 32
+}
+
+// CSET Wd, cond is CSINC Wd, WZR, WZR, inverted-cond, so the alias flips it.
+make t_div_cset(rd: num, cond: num) -> num {
+  give 446629856 + (1 - cond) * 4096 + rd
+}
+
+make t_div_addw(rd: num, rn: num, rm: num) -> num {
+  give 184549376 + rm * 65536 + rn * 32 + rd
+}
+
+make t_div_movw(rd: num, rm: num) -> num {
+  give 704644064 + rm * 65536 + rd
+}
+
+make t_div_mov64(bs: list, rd: num, limb: list) -> list {
+  bs = t_word(bs, t_div_movz64(rd, limb[0]))
+  when limb[1] != 0 {
+    bs = t_word(bs, t_div_movk64(rd, limb[1], 1))
+  }
+  when limb[2] != 0 {
+    bs = t_word(bs, t_div_movk64(rd, limb[2], 2))
+  }
+  when limb[3] != 0 {
+    bs = t_word(bs, t_div_movk64(rd, limb[3], 3))
+  }
+  give bs
+}
+
+// One probe row: operands, the instruction, and the compare that decides it.
+// kind = sdiv + 2*sf for the four divide shapes, and 4 / 5 for the two flag
+// probes, where the divide lands in x26 and what is checked is that a CSET of
+// the condition set before it still reads true afterwards. A divisor spelled
+// "-" is the zero register: the divide-by-zero rows and the poisoned
+// destination are then exercised by the same word.
+make t_div_case(code: list, kind: num, n_hex: str, d_hex: str, q_hex: str) -> list {
+  hold n = [0, 0, 0, 0]
+  hold d = [0, 0, 0, 0]
+  hold want = [0, 0, 0, 0]
+  when t_div_hex(n_hex, n) != 0 {
+    hold b1 = fail_t(concat("bad dividend text in the divide table: ", n_hex))
+  }
+  hold zero_div = 0
+  when string_eq(d_hex, "-") {
+    zero_div = 1
+  } otherwise {
+    when t_div_hex(d_hex, d) != 0 {
+      hold b2 = fail_t(concat("bad divisor text in the divide table: ", d_hex))
+    }
+  }
+  when t_div_hex(q_hex, want) != 0 {
+    hold b3 = fail_t(concat("bad expectation text in the divide table: ", q_hex))
+  }
+  hold sdiv = bit_and(kind, 1)
+  hold sf = shr(kind, 1)
+  when kind >= 4 {
+    sf = 1
+  }
+  hold nlo = n[0] + n[1] * 65536
+  hold nhi = n[2] + n[3] * 65536
+  hold dlo = d[0] + d[1] * 65536
+  hold dhi = d[2] + d[3] * 65536
+  hold out = code
+  when kind < 4 {
+    hold q = [0, 0]
+    hold mn = nlo
+    hold mh = nhi
+    hold md = dlo
+    hold mdh = dhi
+    // A W-form divide reads 32 bits, so the high halves are dropped. For the
+    // signed pair they are replaced by the sign of the low half instead, which
+    // is where a 32-bit operand keeps it -- taking the sign from bit 63 of an
+    // already masked value is how this model first got 0x80000000 / 0xffffffff
+    // wrong, and the row is what caught it.
+    when sf == 0 {
+      mh = 0
+      mdh = 0
+      when sdiv == 1 {
+        when shr(mn, 31) == 1 {
+          mh = 4294967295
+        }
+        when shr(md, 31) == 1 {
+          mdh = 4294967295
+        }
+      }
+    }
+    hold bad = 0
+    when sdiv == 0 {
+      bad = t_dv_uq(mn, mh, md, mdh, q, [0, 0])
+    } otherwise {
+      bad = t_dv_sq(mn, mh, md, mdh, q)
+    }
+    when bad != 0 {
+      hold m1 = fail_t(concat("the divide model cannot check ", n_hex))
+    }
+    when sf == 0 && want[2] + want[3] != 0 {
+      hold m3 = fail_t(concat("a W-form row cannot expect a high half: ", q_hex))
+    }
+    hold qh = q[1]
+    when sf == 0 {
+      qh = 0
+    }
+    when q[0] != want[0] + want[1] * 65536 || qh != want[2] + want[3] * 65536 {
+      hold m2 = fail_t(concat(concat(concat(concat(concat(concat(concat("divide table row ", n_hex), " / "), d_hex), " expects "), q_hex), " but the model gives "), concat(concat(istr(q[1]), ":"), istr(q[0]))))
+    }
+    out = t_word(out, t_div_movz32(10, 53261))
+  }
+  out = t_div_mov64(out, 24, n)
+  when zero_div == 0 {
+    out = t_div_mov64(out, 25, d)
+  }
+  hold rm = 25
+  when zero_div == 1 {
+    rm = 31
+  }
+  when kind < 4 {
+    out = t_word(out, t_div_enc(10, 24, rm, sdiv, sf))
+  } otherwise {
+    out = t_word(out, t_div_cmpx(24, 25))
+    out = t_word(out, t_div_enc(26, 24, 25, sdiv, 1))
+    hold cond = 1
+    when kind == 5 {
+      cond = 0
+    }
+    out = t_word(out, t_div_cset(10, cond))
+  }
+  out = t_div_mov64(out, 11, want)
+  out = t_word(out, t_div_cmpx(10, 11))
+  out = t_word(out, t_div_cset(21, 1))
+  out = t_word(out, t_div_addw(20, 20, 21))
+  give out
+}
+
+// One walk of the probe table: want < 0 appends every row (that is the image the
+// gate runs), want == k appends row k alone. The same generator drives both, so
+// the single-row images the negative control is measured with cannot drift away
+// from the pinned table, and t_div_table_walk below proves the rows tile it.
+make t_div_rows(code: list, want: num) -> list {
+  when want < 0 || want == 0 {
+    code = t_div_case(code, 2, "100000002", "2", "80000001")
+  }
+  when want < 0 || want == 1 {
+    code = t_div_case(code, 2, "fffffffffffffffe", "2", "7fffffffffffffff")
+  }
+  when want < 0 || want == 2 {
+    code = t_div_case(code, 2, "deadbeefcafed00d", "1234", "c3ba5685dc65c")
+  }
+  when want < 0 || want == 3 {
+    code = t_div_case(code, 2, "deadbeefcafed00d", "-", "0")
+  }
+  when want < 0 || want == 4 {
+    code = t_div_case(code, 2, "ffffffffffffffff", "3", "5555555555555555")
+  }
+  when want < 0 || want == 5 {
+    code = t_div_case(code, 2, "100000000", "ffffffff", "1")
+  }
+  when want < 0 || want == 6 {
+    code = t_div_case(code, 2, "ffffffffffffffff", "1", "ffffffffffffffff")
+  }
+  when want < 0 || want == 7 {
+    code = t_div_case(code, 2, "ffffffffffffffff", "8000000000000000", "1")
+  }
+  when want < 0 || want == 8 {
+    code = t_div_case(code, 2, "100000001", "ffffffff", "1")
+  }
+  when want < 0 || want == 9 {
+    code = t_div_case(code, 3, "8000000000000000", "ffffffffffffffff", "8000000000000000")
+  }
+  when want < 0 || want == 10 {
+    code = t_div_case(code, 3, "ffffffff00000000", "100000000", "ffffffffffffffff")
+  }
+  when want < 0 || want == 11 {
+    code = t_div_case(code, 3, "ffffff172b5aefff", "7", "ffffffdebd0cfdb7")
+  }
+  when want < 0 || want == 12 {
+    code = t_div_case(code, 3, "123456789abcdef0", "-", "0")
+  }
+  when want < 0 || want == 13 {
+    code = t_div_case(code, 3, "200000000", "fffffffffffffffd", "ffffffff55555556")
+  }
+  when want < 0 || want == 14 {
+    code = t_div_case(code, 3, "100000000", "1001", "fff00")
+  }
+  when want < 0 || want == 15 {
+    code = t_div_case(code, 3, "ffffffffffffffff", "7fffffffffffffff", "0")
+  }
+  when want < 0 || want == 16 {
+    code = t_div_case(code, 3, "1", "8000000000000000", "0")
+  }
+  when want < 0 || want == 17 {
+    code = t_div_case(code, 0, "deadbeef10000004", "4", "4000001")
+  }
+  when want < 0 || want == 18 {
+    code = t_div_case(code, 1, "80000000", "ffffffff", "80000000")
+  }
+  when want < 0 || want == 19 {
+    code = t_div_case(code, 0, "12345678", "-", "0")
+  }
+  when want < 0 || want == 20 {
+    code = t_div_case(code, 2, "c6a5387777330bdb", "a6233255", "13217580c")
+  }
+  when want < 0 || want == 21 {
+    code = t_div_case(code, 3, "de11cc9dea959c21", "c328dbd25e", "ffffffffffd37de8")
+  }
+  when want < 0 || want == 22 {
+    code = t_div_case(code, 2, "f7f35634f0e3cd97", "f770c226", "100871869")
+  }
+  when want < 0 || want == 23 {
+    code = t_div_case(code, 4, "5", "3", "1")
+  }
+  when want < 0 || want == 24 {
+    code = t_div_case(code, 5, "100000000", "100000000", "1")
+  }
+  give code
+}
+
+// The prologue word (a zeroed failure counter) and the three epilogue words
+// (return w20, exit syscall) are the same in every image, so a row is everything
+// t_div_rows emits for it -- 40 bytes for a plain case, 8 more when the model
+// check needs its own setup word -- and the rows tile that output exactly.
+make t_div_prol() -> num {
+  give t_div_movz32(20, 0)
+}
+
+// Every row has to appear once, in order, with nothing between it and the next:
+// if a row were dropped or duplicated the per-row images would not be the same
+// code the full image runs, and the negative control would be measuring a
+// different program.
+make t_div_table_walk() -> num {
+  hold all = t_div_rows([], 0 - 1)
+  hold bad = 0
+  // t_word appends four bytes and t_div_rows returns only the rows themselves,
+  // so the walk starts at zero and the prologue is not part of what is tiled.
+  hold off = 0
+  hold k = 0
+  while k < 25 {
+    hold part = t_div_rows([], k)
+    hold i = 0
+    while i < len(part) {
+      when all[off + i] != part[i] {
+        bad = 1
+        hold wrong = fail_t("a divide row is not where the table walk put it")
+      }
+      i = i + 1
+    }
+    off = off + len(part)
+    k = k + 1
+  }
+  when off != len(all) {
+    bad = 1
+    hold tail = fail_t("the divide rows do not tile the image")
+  }
+  give bad
+}
+
+// The full image: 23 divides spread over both widths and both signs plus the two
+// flag probes, then the epilogue. The dividend, divisor and expected quotient of
+// each row are the contract; t_dv_uq recomputes every quotient from the operands
+// and t_div_case refuses the file when a row and the model disagree.
+make t_arm_isa_div_elf() -> list {
+  when t_div_table_walk() != 0 {
+    hold tw = fail_t("the divide table is not well formed")
+  }
+  hold code = []
+  code = t_word(code, t_div_prol())
+  code = t_div_rows(code, 0 - 1)
+  code = t_word(code, t_div_movw(0, 20))
+  code = t_word(code, t_div_movz32(8, 93))
+  code = t_word(code, 3556769793)
+  // t_word appends four bytes, so len(code) is already the code size in bytes.
+  when len(code) + 176 > 4096 {
+    hold over = fail_t("the divide probe overflowed its code page")
+  }
+  hold data = []
+  data = t_zeros(data, 640)
+  give t_elf64(code, data, 183)
+}
+
+// One row, wrapped exactly as the full image wraps it, so a non-zero exit tells
+// you which expectation broke instead of only that something did.
+make t_div_row_elf(row: num) -> list {
+  hold all = t_div_rows([], 0 - 1)
+  hold part = t_div_rows([], row)
+  hold off = 0
+  hold k = 0
+  while k < row {
+    off = off + len(t_div_rows([], k))
+    k = k + 1
+  }
+  hold code = []
+  code = t_word(code, t_div_prol())
+  hold i = 0
+  while i < len(part) {
+    code = push(code, all[off + i])
+    i = i + 1
+  }
+  code = t_word(code, t_div_movw(0, 20))
+  code = t_word(code, t_div_movz32(8, 93))
+  code = t_word(code, 3556769793)
+  hold data = []
+  data = t_zeros(data, 640)
+  give t_elf64(code, data, 183)
+}
+
 make t_arm_isa_mem_elf() -> list {
   hold code = []
   code = t_word(code, 1384120340) // mov w20, #0
@@ -2363,6 +2937,8 @@ make test_arm64_isa_coverage(dir: str) -> num {
   hold s_mul = concat(dir, "/isa_mul.arm64.stats")
   hold e_mem = concat(dir, "/isa_mem.arm64.elf")
   hold s_mem = concat(dir, "/isa_mem.arm64.stats")
+  hold e_div = concat(dir, "/isa_div.arm64.elf")
+  hold s_div = concat(dir, "/isa_div.arm64.stats")
   hold e_fp = concat(dir, "/isa_fp.arm64.elf")
   hold s_fp = concat(dir, "/isa_fp.arm64.stats")
   hold e_ctrl = concat(dir, "/isa_ctrl.arm64.elf")
@@ -2375,6 +2951,9 @@ make test_arm64_isa_coverage(dir: str) -> num {
   }
   when write_bytes(e_mul, t_arm_isa_mul_elf()) != 1 {
     hold fmul = fail_t("cannot write the mul AArch64 fixture")
+  }
+  when write_bytes(e_div, t_arm_isa_div_elf()) != 1 {
+    hold fdiv = fail_t("cannot write the divide AArch64 fixture")
   }
   when write_bytes(e_mem, t_arm_isa_mem_elf()) != 1 {
     hold fmem = fail_t("cannot write the mem AArch64 fixture")
@@ -2397,13 +2976,16 @@ make test_arm64_isa_coverage(dir: str) -> num {
   when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_mem), concat(" ", sh_q(e_mem))))) != 0 {
     hold gmem = fail_t("AArch64 mem probes did not all match")
   }
+  when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_div), concat(" ", sh_q(e_div))))) != 0 {
+    hold gdiv = fail_t("AArch64 divide probes did not all match")
+  }
   when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_fp), concat(" ", sh_q(e_fp))))) != 0 {
     hold gfp = fail_t("AArch64 fp probes did not all match")
   }
   when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_ctrl), concat(" ", sh_q(e_ctrl))))) != 0 {
     hold gctrl = fail_t("AArch64 ctrl probes did not all match")
   }
-  show "[ok] AArch64 bit field, CSEL, multiply, load/store, scalar FP and branch probes match their expectations"
+  show "[ok] AArch64 bit field, CSEL, multiply, divide, load/store, scalar FP and branch probes match their expectations"
   give 0
 }
 

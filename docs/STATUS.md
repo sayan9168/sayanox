@@ -1,7 +1,8 @@
 # Status
 
 **2026-11-23 local R02 increment: `read_file`/`write_file` on the three native32
-targets, and AArch64 ISA coverage in `sxisaexec`**
+targets, AArch64 ISA coverage in `sxisaexec`, and the 64-bit divide that coverage
+exposed**
 
 `tools/native32.sa` lowers the two file builtins into the target's own Linux
 syscall ABI -- `openat`, one `read` or `write`, `close` -- behind one lazily
@@ -46,11 +47,19 @@ first `LSR`-as-`UBFM`, the first 64-bit `CSEL`, the first `LDRH`, the first
 wrong. `tools/sxisaexec.sa` also compiles under `SXBUILD_VIA_C=1` now, which `main`
 does not: two registers were held inside one `when` branch and read after it. `test-sxisaexec`,
 `test-native32`, `test-native-arm64` and `test-native-riscv64` pass, and
-`./sx migration` reports 241/241. What stays open is named in the new R20 (the
-32-bit-only AArch64 divide, RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, and
-per-case FP arithmetic probes) and in R02 (structs, growing lists, FP lowering, GC).
-See
-[the gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
+`./sx migration` reports 241/241.
+
+The coverage work then found a silently wrong answer rather than a missing one: the
+emulator executed `UDIV`/`SDIV` through the 32-bit path at *both* widths, accepting
+the word and returning a wrong quotient above 2^32. `a64_div`/`a64_sdiv` now divide
+in the `(lo, hi)` pair domain, pinned by 25 rows that the gate itself generates from
+a hex table and checks against an independent limb model, with 15 deliberate breaks
+of the divide path each caught by a named row. See
+[the divide gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md). What stays open
+is named in R20 (RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, per-case FP
+arithmetic probes, and `SMULH`/`UMULH` decoding as `MADD`/`SMADDL`) and in R02
+(structs, growing lists, FP lowering, GC). See
+[the coverage gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
 
 **2026-11-22 local R07 increment: INI/TOML-lite configuration, gated by an independent oracle**
 

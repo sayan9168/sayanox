@@ -314,6 +314,109 @@ make a64_add(al: num, ah: num, bl: num, bh: num, out: list) -> num {
   give 0
 }
 
+// 64-bit unsigned divide in the pair domain. The dividend, divisor, quotient and
+// remainder are all (lo, hi) u32 pairs, so nothing above 2^53 ever has to be held
+// as a num: this is restoring long division, one dividend bit per iteration.
+// out = [quotient lo, quotient hi, remainder lo, remainder hi]. A zero divisor
+// leaves the quotient at zero, which is the architectured answer for both UDIV
+// and SDIV, so no caller has to special-case it.
+make a64_div(nlo: num, nhi: num, dlo: num, dhi: num, out: list) -> num {
+  hold rlo = 0
+  hold rhi = 0
+  hold qlo = 0
+  hold qhi = 0
+  when dlo != 0 || dhi != 0 {
+    hold i = 63
+    while i >= 0 {
+      hold nb = 0
+      when i >= 32 {
+        nb = bit_and(shr(nhi, i - 32), 1)
+      } otherwise {
+        nb = bit_and(shr(nlo, i), 1)
+      }
+      // R = (R << 1) | bit i of N, one limb pair. Nothing can carry out of bit 63:
+      // after this shift R is exactly the prefix of N formed by bits 63 down to i,
+      // and the subtract below only lowers it, so R <= N < 2^64 at every point here.
+      // Checked by exhaustion too: every operand pair at 6, 8 and 10 bits, all
+      // 256x255 pairs at 8 bits, 200k random 12-bit pairs, 400k structured 64-bit
+      // pairs -- no shift ever needed a 65th bit.
+      hold nl = rlo + rlo + nb
+      hold rl = u32(nl % 4294967296)
+      hold nh = rhi + rhi + (nl - rl) / 4294967296
+      hold rh = u32(nh % 4294967296)
+      hold take = 0
+      when sltu64(rl, rh, dlo, dhi) == 0 {
+        take = 1
+      }
+      when take == 1 {
+        hold sl2 = rl - dlo
+        hold borrow = 0
+        when sl2 < 0 {
+          sl2 = sl2 + 4294967296
+          borrow = 1
+        }
+        rlo = u32(sl2)
+        rhi = u32(rh - dhi - borrow)
+        when i >= 32 {
+          qhi = qhi + shl(1, i - 32)
+        } otherwise {
+          qlo = qlo + shl(1, i)
+        }
+      } otherwise {
+        rlo = rl
+        rhi = rh
+      }
+      i = i - 1
+    }
+  }
+  out[0] = u32(qlo)
+  out[1] = u32(qhi)
+  out[2] = rlo
+  out[3] = rhi
+  give 0
+}
+
+// 64-bit signed divide: take both magnitudes, divide them unsigned, then negate
+// the quotient back when the signs differed. Truncation toward zero falls out of
+// dividing magnitudes, and INT64_MIN / -1 needs no special case because the
+// wrapping negate of 2^63 is 2^63 again -- the architectured saturating answer.
+make a64_sdiv(nlo: num, nhi: num, dlo: num, dhi: num, out: list) -> num {
+  hold nneg = shr(nhi, 31)
+  hold dneg = shr(dhi, 31)
+  hold al = nlo
+  hold ah = nhi
+  when nneg == 1 {
+    al = u32(bit_xor(nlo, 4294967295) + 1)
+    ah = u32(bit_xor(nhi, 4294967295))
+    when al == 0 {
+      ah = u32(ah + 1)
+    }
+  }
+  hold bl = dlo
+  hold bh = dhi
+  when dneg == 1 {
+    bl = u32(bit_xor(dlo, 4294967295) + 1)
+    bh = u32(bit_xor(dhi, 4294967295))
+    when bl == 0 {
+      bh = u32(bh + 1)
+    }
+  }
+  hold q = [0, 0, 0, 0]
+  hold zq = a64_div(al, ah, bl, bh, q)
+  hold ql = q[0]
+  hold qh = q[1]
+  when nneg != dneg {
+    ql = u32(bit_xor(q[0], 4294967295) + 1)
+    qh = u32(bit_xor(q[1], 4294967295))
+    when ql == 0 {
+      qh = u32(qh + 1)
+    }
+  }
+  out[0] = u32(ql)
+  out[1] = u32(qh)
+  give 0
+}
+
 make div_s32_rv(sa: num, sb: num) -> num {
   when sb == 0 {
     give 0 - 1
@@ -1893,24 +1996,42 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       when bit_and(shr(w, 21), 1023) == 214 && bit_and(shr(w, 11), 31) == 1 {
         hold is_sdiv = bit_and(shr(w, 10), 1)
         hold dn = 0
+        hold dnh = 0
         when rn < 31 {
           dn = rlo[rn]
+          dnh = rhi[rn]
         }
         hold dm = 0
+        hold dmh = 0
         when rm < 31 {
           dm = rlo[rm]
+          dmh = rhi[rm]
         }
-        hold dres = 0
-        when is_sdiv == 0 {
-          when dm == 0 {
-            dres = 0
+        // Xd gets the full 64-bit quotient through the pair helpers; Wd keeps the
+        // 32-bit divide and the zero-extend. Reading only the low halves and
+        // writing through set_arm_w, as this did in both widths, lost every
+        // quotient above 2^32 and every negative 64-bit quotient's sign.
+        hold dq = [0, 0, 0, 0]
+        when sf == 1 {
+          when is_sdiv == 0 {
+            hold zu = a64_div(dn, dnh, dm, dmh, dq)
           } otherwise {
-            dres = div_u32(dn, dm)
+            hold zs = a64_sdiv(dn, dnh, dm, dmh, dq)
           }
+          hold zdx = set_arm_x(rlo, rhi, rd, dq[0], dq[1])
         } otherwise {
-          dres = u32(div_s32_arm(s32(dn), s32(dm)))
+          hold dres = 0
+          when is_sdiv == 0 {
+            when dm == 0 && dmh == 0 {
+              dres = 0
+            } otherwise {
+              dres = div_u32(dn, dm)
+            }
+          } otherwise {
+            dres = u32(div_s32_arm(s32(dn), s32(dm)))
+          }
+          hold zd = set_arm_w(rlo, rhi, rd, dres)
         }
-        hold zd = set_arm_w(rlo, rhi, rd, dres)
         handled = 1
       }
       // CSEL / CSINC / CSINV / CSNEG: bits 29-22 == 0b01101010, op = bit 30 : bit 10,
