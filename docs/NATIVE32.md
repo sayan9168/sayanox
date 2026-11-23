@@ -50,6 +50,19 @@ x86-64 test host. RV64GC as a whole is **not** implemented or claimed.
   zero-based; negative indices count back from the end, matching the language
   runtime. An out-of-range index exits with status 1. The index expression can
   use the numeric operators supported by this subset.
+- `read_file(PATH)` and `write_file(PATH, TEXT)` reach the target's own Linux
+  syscall ABI (`openat`, one `read` or `write`, `close`, `exit`), so a generated
+  image needs no runtime. Both take a **string-literal** path only: the NUL that the
+  syscall stops at has to be pooled with the literal, and a variable path is
+  refused. `write_file`'s text must be a string, not a number. `read_file` performs
+  one bounded read of 4096 bytes and returns the span up to the first NUL, so a
+  file whose bytes contain a NUL reads back truncated and a file longer than 4096
+  bytes reads back its first 4096; a path that cannot be opened gives the empty
+  string, and `write_file` answers 0 for a failure rather than faulting. Each image
+  carries at most one routine per builtin and one lazily reserved 4129-byte data
+  block holding the arguments, the descriptor, the counts and the buffer, so a
+  program that never names a builtin emits neither. See
+  [the gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
 - `concat(STRING_ARG, STRING_ARG)` in a string declaration, an assignment or a
   `show`, where each argument is a previously declared string variable, a
   quoted string literal, a whole `chr(X)` value or another `concat(...)` call. Variables contribute their current runtime byte spans;
@@ -459,6 +472,13 @@ bounded-heap exhaustion on all runnable targets, retains integer parity, and
 exercises emulator safety negatives plus scalar FP and Linux syscall probes.
 The latter are emulator tests, not native compiler features.
 
+The `file_io.sa` fixture covers both file builtins on all six execution paths
+(i386 image pinned at 12735 bytes, reviewed AArch64/RV64IM goldens, and
+`file_io.want` as an independent expectation of the printed span), and runs a write
+and a read of a path under a directory that does not exist, which must answer 0 and
+the empty string rather than fault. The two refusals are
+`refuse/io_dynamic_path.sa` and `refuse/io_num_text.sa`.
+
 The `strcopy.sa` fixture covers the string-value copy on all six execution
 paths (seed-min, gen2, x86-64 native AOT, i386, AArch64, RV64), and its data
 segment is compared across the three ISA images. Every fixture in the list now
@@ -564,9 +584,19 @@ compiler slice, not a claim of complete language or ABI coverage.
   moved data segment.
 - The emulator supports only the exercised instruction subsets. It currently
   executes the native32 integer/string images, scalar IEEE-754 F/D arithmetic
-  probes, and bounded Linux `openat`/`read`/`write`/`close`/`exit` calls. The
-  file descriptor model is intentionally bounded and is not a native compiler
-  file-I/O runtime.
+  probes, and bounded Linux `openat`/`read`/`write`/`close`/`exit` calls (the
+  syscall probes in `tools/sxisaexec_test.sa` stay hand-written images; the
+  file-I/O lowering above is what puts the same syscalls in compiler output).
+  AArch64 coverage now also includes the
+  bit-field and `EXTR` forms, the whole `CSEL`/`CSINC`/`CSINV`/`CSNEG` group with
+  its aliases, full 64-bit multiplies and the `*ADDL`/`*SUBL` forms, signed
+  integer accesses with the scaled immediate, `FMOV` in both directions,
+  `FCVTZS`/`FCVTZU` at both widths, and `BR`/`BLR`/`RET` — pinned case by case by
+  `test-sxisaexec` (see
+  [the gate log](gate-logs/2026-11-23-arm64-isa-coverage.md)). A word no decoder
+  claims is a refusal, not a skip; what is still unsupported is the 64-bit divide
+  (which answers from the 32-bit path) and RV64's missing 64-bit
+  `mul`/`mulh`/`div`/`rem` (R20).
 - `tools/sxisaexec.sa` is written in Sayanox and enforces ELF, memory,
   alignment, instruction, syscall, and step-budget checks. See its source and
   `tools/sxisaexec_test.sa` for the exact emulator boundary.
@@ -579,9 +609,11 @@ integer/static-string backend, but do not complete that roadmap item. General
 string operations beyond the documented subset (nested `chr`, `show concat(...)`
 nested `concat` operands, and `len(concat(...))` are now lowered; concat in
 other expression positions is not), general dynamically allocated lists, general structs,
-IEEE-754 code generation, native file I/O, and a mark-and-sweep collector
-remain open, along with broader ISA support and end-to-end parity for each. Do not count
-emulator-only FP/syscall probes as compiler support.
+IEEE-754 code generation, and a mark-and-sweep collector remain open, along with
+broader ISA support and end-to-end parity for each. Native file I/O landed
+2026-11-23 for the two builtins with string-literal paths and one bounded 4 KiB
+read; dynamic paths, appending, directory listing and any larger read are still
+outside the subset. Do not count emulator-only FP probes as compiler support.
 
 The legacy seed/gen2 reference grammar does not accept a spaced `len (` call or
 `len("literal")` directly inside an index. The six-way harness uses

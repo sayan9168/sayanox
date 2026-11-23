@@ -112,6 +112,208 @@ make rem_u32(a: num, b: num) -> num {
   give ua % ub
 }
 
+// ---- AArch64 64-bit pair arithmetic (a value is a u32 lo + u32 hi pair) ----
+// These back the bit field, shift, wide-multiply and carry-aware forms; the
+// interpreter keeps registers as pairs, so every helper takes and returns them.
+make mask32b(bits: num) -> num {
+  when bits >= 32 {
+    give 4294967295
+  }
+  when bits <= 0 {
+    give 0
+  }
+  give shl(1, bits) - 1
+}
+
+make a64_shl(lo: num, hi: num, k: num, out: list) -> num {
+  hold ol = u32(lo)
+  hold oh = u32(hi)
+  when k >= 64 {
+    ol = 0
+    oh = 0
+  }
+  when k > 0 && k < 32 {
+    hold pw = shl(1, k)
+    ol = u32(bit_and(ol, mask32b(32 - k)) * pw)
+    oh = u32(bit_and(oh, mask32b(32 - k)) * pw + shr(lo, 32 - k))
+  }
+  when k == 32 {
+    ol = 0
+    oh = u32(lo)
+  }
+  when k > 32 && k < 64 {
+    ol = 0
+    oh = u32(bit_and(u32(lo), mask32b(64 - k)) * shl(1, k - 32))
+  }
+  out[0] = ol
+  out[1] = oh
+  give 0
+}
+
+make a64_shr(lo: num, hi: num, k: num, out: list) -> num {
+  hold ol = u32(lo)
+  hold oh = u32(hi)
+  when k >= 64 {
+    ol = 0
+    oh = 0
+  }
+  when k > 0 && k < 32 {
+    ol = u32(shr(ol, k) + bit_and(oh, mask32b(k)) * shl(1, 32 - k))
+    oh = shr(oh, k)
+  }
+  when k == 32 {
+    ol = u32(hi)
+    oh = 0
+  }
+  when k > 32 && k < 64 {
+    ol = shr(u32(hi), k - 32)
+    oh = 0
+  }
+  out[0] = ol
+  out[1] = oh
+  give 0
+}
+
+make a64_asr(lo: num, hi: num, k: num, out: list) -> num {
+  hold sg = shr(u32(hi), 31)
+  hold ol = u32(lo)
+  hold oh = u32(hi)
+  when k >= 64 {
+    ol = 0
+    oh = sg * 4294967295
+  }
+  when k > 0 && k < 32 {
+    oh = u32(shr(u32(hi), k) + sg * mask32b(k) * shl(1, 32 - k))
+    ol = u32(shr(u32(lo), k) + bit_and(u32(hi), mask32b(k)) * shl(1, 32 - k))
+  }
+  when k == 32 {
+    ol = u32(hi)
+    oh = sg * 4294967295
+  }
+  when k > 32 && k < 64 {
+    ol = u32(shr(u32(hi), k - 32) + sg * mask32b(k - 32) * shl(1, 64 - k))
+    oh = sg * 4294967295
+  }
+  out[0] = ol
+  out[1] = oh
+  give 0
+}
+
+make a64_ror(lo: num, hi: num, k: num, out: list) -> num {
+  when k == 0 {
+    out[0] = u32(lo)
+    out[1] = u32(hi)
+    give 0
+  }
+  hold t1 = [0, 0]
+  hold t2 = [0, 0]
+  hold z1 = a64_shr(lo, hi, k, t1)
+  hold z2 = a64_shl(lo, hi, 64 - k, t2)
+  out[0] = u32(bit_or(t1[0], t2[0]))
+  out[1] = u32(bit_or(t1[1], t2[1]))
+  give 0
+}
+
+make a64_clip(lo: num, hi: num, bits: num, out: list) -> num {
+  hold ol = u32(lo)
+  hold oh = u32(hi)
+  when bits <= 0 {
+    ol = 0
+    oh = 0
+  }
+  when bits < 32 {
+    ol = bit_and(u32(lo), mask32b(bits))
+    oh = 0
+  }
+  when bits >= 32 && bits < 64 {
+    oh = bit_and(u32(hi), mask32b(bits - 32))
+  }
+  out[0] = ol
+  out[1] = oh
+  give 0
+}
+
+// Sign-extend the low `bits` (1..63) of a pair to a full 64-bit two's value.
+make a64_sext(lo: num, hi: num, bits: num, out: list) -> num {
+  hold t = [0, 0]
+  hold zc = a64_clip(lo, hi, bits, t)
+  hold neg = 0
+  when bits > 0 && bits < 32 {
+    when bit_and(t[0], shl(1, bits - 1)) != 0 {
+      neg = 1
+    }
+  }
+  when bits == 32 {
+    when t[0] >= 2147483648 {
+      neg = 1
+    }
+  }
+  when bits > 32 && bits < 64 {
+    when bit_and(t[1], shl(1, bits - 33)) != 0 {
+      neg = 1
+    }
+  }
+  when neg == 0 {
+    out[0] = t[0]
+    out[1] = t[1]
+    give 0
+  }
+  // Fill every bit above the field with the sign, leaving the field itself
+  // alone: inverting the whole pair would negate the value, not extend it.
+  when bits < 32 {
+    out[0] = u32(t[0] + (4294967295 - mask32b(bits)))
+    out[1] = 4294967295
+    give 0
+  }
+  when bits == 32 {
+    out[0] = t[0]
+    out[1] = 4294967295
+    give 0
+  }
+  out[0] = t[0]
+  out[1] = u32(t[1] + (4294967295 - mask32b(bits - 32)))
+  give 0
+}
+
+// Low 64 bits of the 64x64 product of (al,ah) and (bl,bh).
+make a64_mul(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  hold a0 = bit_and(al, 65535)
+  hold a1 = shr(al, 16)
+  hold a2 = bit_and(ah, 65535)
+  hold a3 = shr(ah, 16)
+  hold b0 = bit_and(bl, 65535)
+  hold b1 = shr(bl, 16)
+  hold b2 = bit_and(bh, 65535)
+  hold b3 = shr(bh, 16)
+  hold l0 = a0 * b0
+  hold l1 = a0 * b1 + a1 * b0
+  hold l2 = a0 * b2 + a1 * b1 + a2 * b0
+  // The fourth column keeps four products: dropping a0 * b3 and a3 * b0 was
+  // invisible while either operand fit in 32 bits, and wrong for a sign-
+  // extended one (SMADDL) or any full 64x64 multiply.
+  hold l3 = a1 * b2 + a2 * b1 + a0 * b3 + a3 * b0
+  hold s0 = l0 + bit_and(l1, 65535) * 65536
+  hold rlo = s0 % 4294967296
+  hold c1 = (s0 - rlo) / 4294967296
+  hold s1 = c1 + (l1 - bit_and(l1, 65535)) / 65536 + l2
+  hold m1 = s1 % 4294967296
+  // s1's carry out of bit 63 leaves the 64-bit product, so it must not be folded
+  // back in; only l3's low 16 bits belong at the top of the high word.
+  out[0] = u32(rlo)
+  out[1] = u32(m1 + (l3 % 65536) * 65536)
+  give 0
+}
+
+// 64-bit add of a pair plus (bl,bh); out[0]=lo, out[1]=hi.
+make a64_add(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  hold sl = al + bl
+  hold rlo = sl % 4294967296
+  hold cy = (sl - rlo) / 4294967296
+  out[0] = u32(rlo)
+  out[1] = u32(ah + bh + cy)
+  give 0
+}
+
 make div_s32_rv(sa: num, sb: num) -> num {
   when sb == 0 {
     give 0 - 1
@@ -1505,9 +1707,10 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       } otherwise {
         hold rlo64 = 0
         hold rhi64 = 0
+        hold rcy = 0
+        hold rbw = 0
         when is_sub_r == 0 {
           rlo64 = nlo + mlo
-          hold rcy = 0
           when rlo64 >= 4294967296 {
             rlo64 = rlo64 - 4294967296
             rcy = 1
@@ -1515,7 +1718,6 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
           rhi64 = u32(nhi + mhi + rcy)
         } otherwise {
           rlo64 = nlo - mlo
-          hold rbw = 0
           when rlo64 < 0 {
             rlo64 = rlo64 + 4294967296
             rbw = 1
@@ -1591,29 +1793,98 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       handled = 1
     }
 
-    // 5. Data-Processing 3-Source: MADD / MSUB (mid5 == 27)
+    // 5. Data-Processing 3-Source: MADD / MSUB and the wide SMADDL / UMADDL /
+    // SMSUBL / UMSUBL forms (bit 21 = L picks the 32x32 -> 64 pair, bit 23 = U
+    // picks unsigned). MADD/MSUB used to be evaluated with 32-bit arithmetic in
+    // both widths, and umaddl fell into the MSUB path; both are fixed here.
     when handled == 0 && mid5 == 27 {
       hold o0_m = bit_and(shr(w, 15), 1)
       hold ra_m = bit_and(shr(w, 10), 31)
-      hold vn = 0
-      when rn < 31 {
-        vn = rlo[rn]
+      hold l_m = bit_and(shr(w, 21), 1)
+      hold u_m = bit_and(shr(w, 23), 1)
+      when l_m == 0 && u_m == 1 {
+        hold f3s = fail_isa(1, concat("AArch64 unallocated 3-source encoding ", istr(w)))
       }
-      hold vm = 0
-      when rm < 31 {
-        vm = rlo[rm]
+      when l_m == 1 && sf == 0 {
+        hold f3w = fail_isa(1, "AArch64 wide multiply with a 32-bit destination is unallocated")
       }
-      hold va = 0
-      when ra_m < 31 {
-        va = rlo[ra_m]
+      when handled == 0 {
+        hold vn = 0
+        hold vh = 0
+        when rn < 31 {
+          vn = rlo[rn]
+          vh = rhi[rn]
+        }
+        hold vm = 0
+        hold vmh = 0
+        when rm < 31 {
+          vm = rlo[rm]
+          vmh = rhi[rm]
+        }
+        hold va = 0
+        hold vah = 0
+        when ra_m < 31 {
+          va = rlo[ra_m]
+          vah = rhi[ra_m]
+        }
+        hold pl = 0
+        hold ph = 0
+        when l_m == 0 && sf == 0 {
+          pl = mul32_u(vn, vm)
+          ph = 0
+        }
+        when l_m == 0 && sf == 1 {
+          hold pm64 = [0, 0]
+          hold zpm = a64_mul(vn, vh, vm, vmh, pm64)
+          pl = pm64[0]
+          ph = pm64[1]
+        }
+        when l_m == 1 && u_m == 0 {
+          hold sn = 0
+          when vn >= 2147483648 {
+            sn = 1
+          }
+          hold sm = 0
+          when vm >= 2147483648 {
+            sm = 1
+          }
+          hold pw32 = [0, 0]
+          hold zpw = a64_mul(vn, sn * 4294967295, vm, sm * 4294967295, pw32)
+          pl = pw32[0]
+          ph = pw32[1]
+        }
+        when l_m == 1 && u_m == 1 {
+          hold pu32 = [0, 0]
+          hold zpu = a64_mul(vn, 0, vm, 0, pu32)
+          pl = pu32[0]
+          ph = pu32[1]
+        }
+        hold al = va
+        hold ah = vah
+        when l_m == 0 && sf == 0 {
+          ah = 0
+        }
+        when o0_m == 1 {
+          hold nl = u32(bit_xor(pl, 4294967295) + 1)
+          hold nh = u32(bit_xor(ph, 4294967295))
+          when nl == 0 {
+            nh = u32(nh + 1)
+          }
+          pl = nl
+          ph = nh
+        }
+        hold sm64 = [0, 0]
+        hold zsa = a64_add(al, ah, pl, ph, sm64)
+        when sf == 0 || l_m == 0 {
+          when sf == 0 {
+            hold zmw = set_arm_w(rlo, rhi, rd, sm64[0])
+          }
+        }
+        when sf == 1 {
+          hold zmx = set_arm_x(rlo, rhi, rd, sm64[0], sm64[1])
+        }
+        handled = 1
       }
-      hold prod = mul32_u(vn, vm)
-      hold mres = u32(va + prod)
-      when o0_m == 1 {
-        mres = u32(va - prod)
-      }
-      hold zm = set_arm_w(rlo, rhi, rd, mres)
-      handled = 1
     }
 
     // 6. Data-Processing 2-Source: UDIV / SDIV & CSINC (mid5 == 26)
@@ -1642,22 +1913,180 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
         hold zd = set_arm_w(rlo, rhi, rd, dres)
         handled = 1
       }
-      // CSINC / CSET: (w & 0x7FE00C00) == 0x1A800400
-      when handled == 0 && bit_and(shr(w, 21), 1023) == 212 && bit_and(shr(w, 10), 3) == 1 {
+      // CSEL / CSINC / CSINV / CSNEG: bits 29-22 == 0b01101010, op = bit 30 : bit 10,
+      // condition in bits 15-12. CSET and CSETM are the Rn = Rm = 11111 aliases.
+      // The old path was 32-bit only and matched CSINC alone, so `csinc x0, x1,
+      // x2, eq` came back zero-extended and the other three faulted.
+      when handled == 0 && bit_and(shr(w, 22), 255) == 106 && bit_and(shr(w, 21), 1) == 0 && bit_and(shr(w, 11), 1) == 0 {
+        hold opc_c = bit_and(shr(w, 30), 1) * 2 + bit_and(shr(w, 10), 1)
         hold cc_cs = bit_and(shr(w, 12), 15)
-        hold cvn = 0
+        hold cn_lo = 0
+        hold cn_hi = 0
         when rn < 31 {
-          cvn = rlo[rn]
+          cn_lo = rlo[rn]
+          cn_hi = rhi[rn]
         }
-        hold cvm = 0
+        hold cm_lo = 0
+        hold cm_hi = 0
         when rm < 31 {
-          cvm = rlo[rm]
+          cm_lo = rlo[rm]
+          cm_hi = rhi[rm]
         }
-        hold cres = u32(cvm + 1)
+        // All four take Rn on the true arm and Rm on the false one; CSINC /
+        // CSINV / CSNEG additionally transform that false-arm Rm (+1, ~, negate).
+        // Every alias in the group (CINC, CNEG, CSET, CSETM) is spelled with the
+        // inverted condition and the same register twice, which is what makes the
+        // mnemonic read naturally -- and why only a distinct Rn/Rm pair pins the
+        // choice down. QEMU/Unicorn agrees on all twelve combinations.
+        hold cl = cm_lo
+        hold ch = cm_hi
         when arm_cond_ok(cc_cs, nf, zf, cf, vf) == 1 {
-          cres = cvn
+          cl = cn_lo
+          ch = cn_hi
         }
-        hold zcs = set_arm_w(rlo, rhi, rd, cres)
+        when opc_c == 1 && arm_cond_ok(cc_cs, nf, zf, cf, vf) == 0 {
+          hold cl1 = u32(cl + 1)
+          when cl1 == 0 {
+            ch = u32(ch + 1)
+          }
+          cl = cl1
+        }
+        when opc_c == 2 && arm_cond_ok(cc_cs, nf, zf, cf, vf) == 0 {
+          cl = u32(bit_xor(cl, 4294967295))
+          ch = u32(bit_xor(ch, 4294967295))
+        }
+        when opc_c == 3 && arm_cond_ok(cc_cs, nf, zf, cf, vf) == 0 {
+          hold cn_l = u32(bit_xor(cl, 4294967295) + 1)
+          ch = u32(bit_xor(ch, 4294967295))
+          when cn_l == 0 {
+            ch = u32(ch + 1)
+          }
+          cl = cn_l
+        }
+        when sf == 0 {
+          hold zc32 = set_arm_w(rlo, rhi, rd, u32(cl))
+        } otherwise {
+          hold zc64 = set_arm_x(rlo, rhi, rd, cl, ch)
+        }
+        handled = 1
+      }
+    }
+
+    // 6b. Shift and bit field: SBFM / BFM / UBFM (mid5 == 19, bit 23 == 0) and
+    // EXTR (bit 23 == 1). LSL / LSR / ASR / ROR / SBFX / UBFX / SBFIZ / UBFIZ / BFIL are
+    // aliases of these, so one path covers the whole group: the field is
+    // (imms - immr + 1) wide at bit immr when imms >= immr, and otherwise the
+    // low (imms + 1) bits shifted left by (regsize - immr).
+    when handled == 0 && mid5 == 19 && bit_and(shr(w, 22), 1) == sf {
+      hold is_ex = bit_and(shr(w, 23), 1)
+      hold opc_b = bit_and(shr(w, 29), 3)
+      hold immr_b = bit_and(shr(w, 16), 63)
+      hold imms_b = bit_and(shr(w, 10), 63)
+      hold rsz = 32
+      when sf == 1 {
+        rsz = 64
+      }
+      hold rm_e = bit_and(shr(w, 16), 31)
+      when is_ex == 0 && (opc_b == 3 || (opc_b == 1 && immr_b == 0 && imms_b == rsz - 1)) {
+        hold fb0 = fail_isa(1, concat("AArch64 unallocated bit field encoding ", istr(w)))
+      }
+      when immr_b >= rsz || imms_b >= rsz {
+        hold fb1 = fail_isa(1, concat("AArch64 bit field immediate out of range for the ", concat(istr(rsz), "-bit form")))
+      }
+      when is_ex == 1 && bit_and(shr(w, 21), 1) != 0 {
+        hold fb2 = fail_isa(1, "AArch64 EXTR with a set o1 bit is unallocated")
+      }
+      when handled == 0 {
+        hold n_lo = 0
+        hold n_hi = 0
+        when rn < 31 {
+          n_lo = rlo[rn]
+          n_hi = rhi[rn]
+        }
+        when sf == 0 {
+          n_hi = 0
+        }
+        hold fv = [0, 0]
+        hold fpos = immr_b
+        hold fwid = imms_b - immr_b + 1
+        when imms_b < immr_b {
+          fpos = rsz - immr_b
+          fwid = imms_b + 1
+        }
+        // EXTR carries its own 6-bit shift amount at 15:10; the bit-field forms
+        // read the same slots as `imms`, and immr_b there is Rm<<1 for EXTR.
+        hold lsb_e = bit_and(shr(w, 10), 63)
+        hold t_sh = [0, 0]
+        hold t_lf = [0, 0]
+        when is_ex == 1 {
+          hold m_lo = 0
+          hold m_hi = 0
+          when rm_e < 31 {
+            m_lo = rlo[rm_e]
+            m_hi = rhi[rm_e]
+          }
+          when sf == 0 {
+            m_hi = 0
+          }
+          // EXTR Xd, Xn, Xm, #lsb shifts the 128-bit pair Xn:Xm down by lsb and
+          // keeps the low 64 bits: Xm (20:16) is the part that moves right and
+          // Xn the part that lands above it.
+          when lsb_e == 0 {
+            fv[0] = m_lo
+            fv[1] = m_hi
+          }
+          when lsb_e > 0 {
+            hold ze1 = a64_shr(m_lo, m_hi, lsb_e, fv)
+            hold zs1 = a64_shl(n_lo, n_hi, rsz - lsb_e, t_lf)
+            fv[0] = u32(bit_or(fv[0], t_lf[0]))
+            fv[1] = u32(bit_or(fv[1], t_lf[1]))
+          }
+          when sf == 0 {
+            hold zc1 = a64_clip(fv[0], fv[1], 32, t_sh)
+            fv[0] = t_sh[0]
+            fv[1] = t_sh[1]
+          }
+        } otherwise {
+          hold zt0 = [0, 0]
+          when imms_b >= immr_b {
+            hold zsr = a64_shr(n_lo, n_hi, immr_b, zt0)
+            hold zcl2 = a64_clip(zt0[0], zt0[1], fwid, fv)
+            when opc_b == 0 {
+              hold zs2 = [0, 0]
+              hold zsx = a64_sext(fv[0], fv[1], fwid, zs2)
+              fv[0] = zs2[0]
+              fv[1] = zs2[1]
+            }
+          } otherwise {
+            // imms < immr wraps: the field is Xm<imms:0>, sign-extended while it
+            // still sits at bit (imms) and only then shifted up to bit
+            // (regsize - immr). Extending after the shift would read the wrong
+            // bit and the clip would drop the value.
+            hold zcl = a64_clip(n_lo, n_hi, fwid, zt0)
+            when opc_b == 0 {
+              hold zs3 = [0, 0]
+              hold zsx2 = a64_sext(zt0[0], zt0[1], fwid, zs3)
+              zt0[0] = zs3[0]
+              zt0[1] = zs3[1]
+            }
+            hold zsl = a64_shl(zt0[0], zt0[1], fpos, fv)
+          }
+          when sf == 0 {
+            fv[1] = 0
+          }
+        }
+        hold res_lo = fv[0]
+        hold res_hi = fv[1]
+        // BFM/BFXIL overwrite the whole destination: the extracted field lands at
+        // bit 0 and everything above it is zeroed (only the wrapping form, whose
+        // field spans all register bits, places it at regsize - immr). So nothing
+        // of the old destination survives and no merge is needed - a merge is
+        // what made `bfm x10, x1, #4, #12` keep x10's top bits.
+        when sf == 0 {
+          hold zf1 = set_arm_w(rlo, rhi, rd, u32(res_lo))
+        } otherwise {
+          hold zf2 = set_arm_x(rlo, rhi, rd, res_lo, res_hi)
+        }
         handled = 1
       }
     }
@@ -1747,21 +2176,102 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
           z32 = x32 - y32
         }
         f_lo[rd] = num_to_fp32(z32)
-        f_hi[rd] = 4294967295
+        f_hi[rd] = 0
         handled = 1
       }
     }
-    // FCVTZS Wd,Dn and FCVTZS Wd,Sn, round toward zero.
-    when handled == 0 && shr(w, 24) == 30 && (bit_and(shr(w, 16), 127) == 120 || bit_and(shr(w, 16), 127) == 56) {
-      hold cv_is_d = 0
+    // 8a. FMOV between a general register and an FP register: FMOV Xd, Dn /
+    // FMOV Dn, Xd (and the Wd, Sn pair). They move the raw bits, which is how a
+    // double is inspected or built without going through a conversion.
+    when handled == 0 && (shr(w, 24) == 158 || shr(w, 24) == 30) && (bit_and(shr(w, 16), 255) == 102 || bit_and(shr(w, 16), 255) == 103 || bit_and(shr(w, 16), 255) == 38 || bit_and(shr(w, 16), 255) == 39) && bit_and(shr(w, 10), 63) == 0 {
+      hold to_fp = bit_and(shr(w, 16), 1)
+      hold dbl = 0
+      when shr(w, 24) == 158 {
+        dbl = 1
+      }
+      // The two directions name their fields the other way round: `fmov Xd, Dn`
+      // keeps the GPR in Rd and the FP register in Rn, while `fmov Dn, Xd` puts
+      // the FP register in Rd and the GPR in Rn (capstone agrees on both, and a
+      // single-precision write leaves the upper half of Vn zeroed).
+      when to_fp == 1 {
+        hold g_lo = 0
+        hold g_hi = 0
+        when rn < 31 {
+          g_lo = rlo[rn]
+          g_hi = rhi[rn]
+        }
+        f_lo[rd] = g_lo
+        hold fmov_hi = 0
+        when dbl == 1 {
+          fmov_hi = g_hi
+        }
+        f_hi[rd] = fmov_hi
+      } otherwise {
+        hold fl = f_lo[rn]
+        hold fh = f_hi[rn]
+        when dbl == 0 {
+          hold zf1 = set_arm_w(rlo, rhi, rd, fl)
+        } otherwise {
+          hold zf2 = set_arm_x(rlo, rhi, rd, fl, fh)
+        }
+      }
+      handled = 1
+    }
+
+    // FCVTZS / FCVTZU <Wd|Xd>, <Sn|Dn>: convert to an integer toward zero.
+    // Field 22:16 says which source width (120/121 double, 56/57 single) and
+    // whether the result is unsigned (odd value); bit 31 picks Wd from Xd.
+    when handled == 0 && (shr(w, 24) == 158 || shr(w, 24) == 30) && (bit_and(shr(w, 16), 126) == 120 || bit_and(shr(w, 16), 126) == 56) {
+      hold cv_sf = shr(w, 31)
+      hold cv_uns = bit_and(shr(w, 16), 1)
       hold cvnum = fp32_to_num(f_lo[rn])
-      when bit_and(shr(w, 16), 127) == 120 {
-        cv_is_d = 1
+      when bit_and(shr(w, 16), 127) >= 120 {
         cvnum = fp64_to_num(f_hi[rn], f_lo[rn])
       }
       hold frac = cvnum % 1.0
       hold cvint = cvnum - frac
-      hold zcv = set_arm_w(rlo, rhi, rd, cvint)
+      hold cv_lo = 0
+      hold cv_hi = 0
+      when cvint >= 0 {
+        cv_lo = u32(cvint)
+        cv_hi = u32((cvint - cv_lo) / 4294967296)
+      }
+      when cvint < 0 {
+        hold tw = u32(0 - cvint)
+        hold twh = u32((0 - cvint - tw) / 4294967296)
+        cv_lo = u32(bit_xor(tw, 4294967295) + 1)
+        cv_hi = u32(bit_xor(twh, 4294967295))
+        when cv_lo == 0 {
+          cv_hi = u32(cv_hi + 1)
+        }
+      }
+      // Out-of-range results saturate: a negative value becomes 0 for the
+      // unsigned form, and either end of the destination range for the signed one.
+      when cv_uns == 1 {
+        when cvint < 0 {
+          cv_lo = 0
+          cv_hi = 0
+        }
+        when cvint >= 18446744073709551616 {
+          cv_lo = 4294967295
+          cv_hi = 4294967295
+        }
+      }
+      when cv_uns == 0 {
+        when cvint < -9223372036854775808 {
+          cv_lo = 0
+          cv_hi = 2147483648
+        }
+        when cvint >= 9223372036854775808 {
+          cv_lo = 4294967295
+          cv_hi = 2147483647
+        }
+      }
+      when cv_sf == 0 {
+        hold zcv = set_arm_w(rlo, rhi, rd, cv_lo)
+      } otherwise {
+        hold zcv2 = set_arm_x(rlo, rhi, rd, cv_lo, cv_hi)
+      }
       handled = 1
     }
     // Scalar FP unsigned-immediate LDR/STR (S and D registers).
@@ -1782,7 +2292,7 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       when fsz == 2 && fopc == 1 {
         hold fld = vmem_ld32(img_mem, stk_mem, page_perm, faddr, 4)
         f_lo[rd] = fld
-        f_hi[rd] = 4294967295
+        f_hi[rd] = 0
         handled = 1
       }
       when fsz == 3 && fopc == 0 {
@@ -1852,6 +2362,113 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
         hold z_ldrx = set_arm_x(rlo, rhi, rd, xlo_l, xhi_l)
         handled = 1
       }
+      // Halfword and signed accesses. STRH / LDRH / LDRSH / LDRSB / LDRSW were
+      // unallocated here, which made any arm64 image using them fault.
+      when sz_ls == 0 && opc_ls == 2 {
+        hold sb_x = signext(vmem_ld8(img_mem, stk_mem, page_perm, adr_ls), 8)
+        hold sb_xl = u32(sb_x)
+        hold sb_xh = 0
+        when sb_x < 0 {
+          sb_xh = 4294967295
+        }
+        hold z_ldrsbx = set_arm_x(rlo, rhi, rd, sb_xl, sb_xh)
+        handled = 1
+      }
+      when sz_ls == 0 && opc_ls == 3 {
+        hold sb_w = u32(signext(vmem_ld8(img_mem, stk_mem, page_perm, adr_ls), 8))
+        hold z_ldrsbw = set_arm_w(rlo, rhi, rd, sb_w)
+        handled = 1
+      }
+      when sz_ls == 1 && opc_ls == 0 {
+        hold hv_s = 0
+        when rd < 31 {
+          hv_s = rlo[rd]
+        }
+        hold z_strh0 = vmem_st8(img_mem, stk_mem, page_perm, adr_ls, bit_and(hv_s, 255))
+        hold z_strh1 = vmem_st8(img_mem, stk_mem, page_perm, adr_ls + 1, bit_and(shr(hv_s, 8), 255))
+        handled = 1
+      }
+      when sz_ls == 1 && opc_ls == 1 {
+        hold hl0 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls)
+        hold hl1 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls + 1)
+        hold z_ldrh = set_arm_w(rlo, rhi, rd, hl0 + hl1 * 256)
+        handled = 1
+      }
+      when sz_ls == 1 && opc_ls == 2 {
+        hold hs0 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls)
+        hold hs1 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls + 1)
+        hold hsv = signext(hs0 + hs1 * 256, 16)
+        hold z_ldshx = set_arm_x(rlo, rhi, rd, u32(hsv), 0)
+        when hsv < 0 {
+          hold z_ldshx2 = set_arm_x(rlo, rhi, rd, u32(hsv), 4294967295)
+        }
+        handled = 1
+      }
+      when sz_ls == 1 && opc_ls == 3 {
+        hold hw0 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls)
+        hold hw1 = vmem_ld8(img_mem, stk_mem, page_perm, adr_ls + 1)
+        hold hwv = u32(signext(hw0 + hw1 * 256, 16))
+        hold z_ldshw = set_arm_w(rlo, rhi, rd, hwv)
+        handled = 1
+      }
+      when sz_ls == 2 && opc_ls == 2 {
+        hold sw_lo = vmem_ld32(img_mem, stk_mem, page_perm, adr_ls, 4)
+        hold z_ldrsw = set_arm_x(rlo, rhi, rd, sw_lo, 0)
+        when sw_lo >= 2147483648 {
+          hold z_ldrsw2 = set_arm_x(rlo, rhi, rd, sw_lo, 4294967295)
+        }
+        handled = 1
+      }
+      when (sz_ls == 2 && opc_ls == 3) || (sz_ls == 3 && opc_ls >= 2) {
+        hold fldst = fail_isa(1, concat("AArch64 unallocated load/store encoding ", istr(w)))
+      }
+    }
+
+    // 8b. BR / BLR Xn: indirect branch through a register. BLR links the return
+    // address into X30, which is how the n32 runtime and the emulator's own
+    // tests call into a routine whose address is only known at run time.
+    when handled == 0 && (bit_and(shr(w, 10), 1048575) == 362432 || bit_and(shr(w, 10), 1048575) == 364480) && rd == 0 {
+      hold is_blr = bit_and(shr(w, 21), 1)
+      when rn == 31 {
+        hold fbrz = fail_isa(1, "AArch64 BR/BLR XZR fault")
+      }
+      when is_blr == 1 {
+        hold zblrr = set_arm_x(rlo, rhi, 30, pc + 4, 0)
+      }
+      next_pc = u32(rlo[rn])
+      when sf == 1 && rhi[rn] != 0 {
+        next_pc = rlo[rn] + rhi[rn] * 4294967296
+      }
+      handled = 1
+    }
+
+    // 8c. ADR / ADRP: PC-relative address of a 21-bit signed immediate, with
+    // ADRP aligned to the 4 KiB page (the image base is page aligned, so the
+    // data segment is reachable through it).
+    when handled == 0 && mid5 == 16 {
+      hold immlo_a = bit_and(shr(w, 29), 3)
+      hold immhi_a = bit_and(shr(w, 5), 262143)
+      // immhi:immlo -- the two-bit field at 30:29 holds the LOW end of the
+      // 21-bit displacement, not the high end.
+      hold imm21 = signext(immhi_a * 4 + immlo_a, 21)
+      hold adrp_a = bit_and(shr(w, 31), 1)
+      hold pc_a = u32(pc)
+      when adrp_a == 1 {
+        pc_a = pc - bit_and(pc, 4095)
+      }
+      hold delta = imm21
+      when adrp_a == 1 {
+        delta = imm21 * 4096
+      }
+      hold tot_a = pc_a + delta
+      hold res_a = u32(tot_a)
+      hold res_ah = u32((tot_a - res_a) / 4294967296)
+      when sf == 0 {
+        hold za3 = set_arm_w(rlo, rhi, rd, res_a)
+      } otherwise {
+        hold za4 = set_arm_x(rlo, rhi, rd, res_a, res_ah)
+      }
+      handled = 1
     }
 
     // 9. Unconditional B (top6 == 5) and BL (top6 == 37)

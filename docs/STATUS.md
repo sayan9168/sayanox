@@ -1,5 +1,57 @@
 # Status
 
+**2026-11-23 local R02 increment: `read_file`/`write_file` on the three native32
+targets, and AArch64 ISA coverage in `sxisaexec`**
+
+`tools/native32.sa` lowers the two file builtins into the target's own Linux
+syscall ABI -- `openat`, one `read` or `write`, `close` -- behind one lazily
+reserved 4129-byte data block and one shared routine per builtin placed after the
+`make` bodies, so arguments and results never touch the value stack, a program that
+does not name a builtin emits neither the block nor the routine, and the data
+segment stays arch-neutral (R14). `write_file` answers
+`(count == len) && (close == 0)`; `read_file` does one bounded 4096-byte read and
+returns the span up to the first NUL, which is the span rule every other string
+value in the dialect already follows, and a failed open answers the empty string.
+Two shapes are refused instead of approximated: a variable path (the NUL has to be
+pooled with the literal) and a numeric text. `selfhost/native32_tests/file_io.sa`
+runs on all six execution paths with an independent `.want`, reviewed AArch64 and
+RV64IM goldens and a pinned 12735-byte i386 image, and both refusals are in
+`refuse/`. Getting there needed the emulator: on `main`, `tools/sxisaexec.sa`
+refused most of the AArch64 forms the file-I/O lowering emits and computed wrong
+answers where it did decode. Each area was settled by running one instruction and
+comparing the emulator against QEMU user-mode ARM64 (Unicorn) and a hand-written
+expectation, with emulator-vs-QEMU as the arbiter -- three of those expectations
+were the wrong column. Added now: `SBFM`/`UBFM`/`BFM`/`EXTR` (with `EXTR`'s 6-bit
+amount at 15:10 and `Rn` as the high half of the pair), the full
+`CSEL`/`CSINC`/`CSINV`/`CSNEG` group at both widths and their
+`CINC`/`CNEG`/`CSET`/`CSETM` aliases, `FMOV` between the general and FP registers,
+`FCVTZS`/`FCVTZU` at all four shape combinations with saturation, `LDRH`/`LDRSH`/
+`LDRSB`/`LDRSW`, `BR`/`BLR`/`RET` and `ADR`/`ADRP`. Fixed in what `main` did decode:
+its 3-source block multiplied the low halves only and zero-extended, so a 64-bit
+`MADD` lost everything above 2^32 and `SMADDL` was indistinguishable from `UMADDL`
+(the pair-domain helper this replaces had its own trap -- folding the carry out of
+bit 63 back into the high word answers `(-2) * (-4)` = `00020000_00000008`),
+`LDR S` filled `V<n><63:32>` with ones instead of zeroes, and `CSETM` was swallowed
+by the `CSINC` shape and answered `+1`.
+Unallocated shapes *inside* decoded groups (the 3-source base, out-of-range bit-field
+immediates, `EXTR` with o1 set) now refuse instead of executing; refusal of words no
+decoder claims was already in place and was re-checked against twelve such encodings.
+71 single-instruction probes in six images, each seeding its own registers and
+accumulating a mismatch count in `w20`, are committed as image builders in
+`tools/sxisaexec_test.sa`; seven deliberate breaks of the decoders each make exactly
+one image fail, so the probes are not passing by construction. Running the six
+images against the `main` build is itself the regression evidence: it refuses at the
+first `LSR`-as-`UBFM`, the first 64-bit `CSEL`, the first `LDRH`, the first
+`FMOV` and the first `ADRP`, and finishes the multiply image with six of nine probes
+wrong. `tools/sxisaexec.sa` also compiles under `SXBUILD_VIA_C=1` now, which `main`
+does not: two registers were held inside one `when` branch and read after it. `test-sxisaexec`,
+`test-native32`, `test-native-arm64` and `test-native-riscv64` pass, and
+`./sx migration` reports 241/241. What stays open is named in the new R20 (the
+32-bit-only AArch64 divide, RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, and
+per-case FP arithmetic probes) and in R02 (structs, growing lists, FP lowering, GC).
+See
+[the gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
+
 **2026-11-22 local R07 increment: INI/TOML-lite configuration, gated by an independent oracle**
 
 `stdlib/ini.sa` reads a `.ini`/`pyproject`-shaped document into a packed

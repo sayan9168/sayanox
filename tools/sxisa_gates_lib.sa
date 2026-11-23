@@ -163,7 +163,7 @@ make xc_containers(d: str, arch: str) -> num {
   }
   // List writes are outside the native_aot profile. Still require deterministic
   // images, cross-ISA data equality, and an independent i386 output oracle.
-  hold writes = "list_set\nlist_set_extra\nlist_set_negative\nlist_set_nested\nlist_set_reset\nlist_grow\nlist_grow_extra\nstruct_string_frame\nstruct_string_extra\nstruct_string_index\n"
+  hold writes = "list_set\nlist_set_extra\nlist_set_negative\nlist_set_nested\nlist_set_reset\nlist_grow\nlist_grow_extra\nstruct_string_frame\nstruct_string_extra\nstruct_string_index\nfile_io\n"
   hold wi = 0
   while wi < len(writes) {
     hold begin = wi
@@ -179,7 +179,7 @@ make xc_containers(d: str, arch: str) -> num {
     when string_eq(arch, "i386") == 0 {
       build = pg_command(xc_command(source, kp_join(d, "write-i386.elf"), "i386"), "list write alternate encoder")
       hold data = xc_data(image, kp_join(d, "write-i386.elf"))
-      when string_eq(name, "list_set") == 1 || string_eq(name, "list_grow") == 1 || string_eq(name, "struct_string_index") == 1 || string_eq(name, "struct_string_extra") == 1 {
+      when string_eq(name, "list_set") == 1 || string_eq(name, "list_grow") == 1 || string_eq(name, "struct_string_index") == 1 || string_eq(name, "struct_string_extra") == 1 || string_eq(name, "file_io") == 1 {
         hold golden = kp_join("selfhost/native32_tests/golden", concat(name, concat(".", concat(arch, ".elf"))))
         equal = gl_assert_files_eq(image, golden, "list write machine-code golden")
       }
@@ -188,6 +188,7 @@ make xc_containers(d: str, arch: str) -> num {
       when string_eq(name, "list_grow") == 1 { hold size = gl_assert_eq_num(path_size(image), 8296, "growing list i386 image size") }
       when string_eq(name, "struct_string_index") == 1 { hold size = gl_assert_eq_num(path_size(image), 8287, "struct string index i386 image size") }
       when string_eq(name, "struct_string_extra") == 1 { hold size = gl_assert_eq_num(path_size(image), 8328, "struct string selector initializer i386 image size") }
+      when string_eq(name, "file_io") == 1 { hold size = gl_assert_eq_num(path_size(image), 12735, "file io i386 image size") }
       when can_run == 1 {
         hold executable = xb_publish(image)
         hold run = pg_capture(gl_sh_quote(image), kp_join(d, "list-write.out"))
@@ -195,7 +196,7 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 103)
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 105)
   hold struct_refusals = xc_refusals("selfhost/native32_tests/struct_mutation_refuse", d, arch, 0, 6)
   hold string_struct_refusals = xc_refusals("selfhost/native32_tests/struct_string_refuse", d, arch, 0, 9)
   hold string_init_refusals = xc_refusals("selfhost/native32_tests/struct_string_initializer_refuse", d, arch, 0, 3)
