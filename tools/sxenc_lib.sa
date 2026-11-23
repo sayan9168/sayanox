@@ -24,7 +24,7 @@
 //                     1800000.. ilog appended via push)
 
 make enc_meta() -> num {
-  give 36000
+  give 72000
 }
 
 make istr(v: num) -> str {
@@ -53,7 +53,7 @@ make make_enc_state(base_cn: num) -> list {
   hold st = []
   hold i = 0
   hold neg1 = 0 - 1
-  while i < 36000 {
+  while i < 72000 {
     st = push(st, 0)
     i = i + 1
   }
@@ -67,13 +67,13 @@ make make_enc_state(base_cn: num) -> list {
   st[7] = 0
   st[8] = 0
   st[9] = 0
-  st[50] = 36000
-  st[51] = 8192
-  st[52] = 31776
-  st[53] = 4096
+  st[50] = 72000
+  st[51] = 16384
+  st[52] = 56352
+  st[53] = 12288
   st[54] = 524288
-  st[55] = 560288
-  st[56] = 2100000
+  st[55] = 596288
+  st[56] = 2200000
   i = 0
   while i < 40 {
     hold bs = 10 + i
@@ -1604,6 +1604,13 @@ make syscall_inst(st: list) -> list {
   st = e1(st, 15)
   st = e1(st, 5)
   give st
+}
+
+make syscall_log_inst(st: list) -> list {
+  when st[5] == 1 {
+    st = elog_line(st, "syscall")
+  }
+  give syscall_inst(st)
 }
 
 make ret_inst(st: list) -> list {

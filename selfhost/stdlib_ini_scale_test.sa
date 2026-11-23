@@ -1,0 +1,77 @@
+use "stdlib/csv.sa"
+use "stdlib/csv_table.sa"
+use "stdlib/ini.sa"
+
+// Build an INI document with `total` member rows distributed across the
+// default section (first 15 rows) and 16 named sections [s0]..[s15].
+make build_doc(total: num, dup_last: num) -> str {
+  hold out = ""
+  hold chunk = ""
+  hold sec = 0 - 1
+  hold i = 0
+  while i < total {
+    when i >= 15 {
+      hold want_sec = ((i - 15) - ((i - 15) % 63)) / 63
+      when want_sec != sec {
+        hold sec = want_sec
+        hold hdr = concat("[s", concat(csv_istr(sec), concat("]", chr(10))))
+        hold chunk = concat(chunk, hdr)
+      }
+    }
+    hold key_id = i
+    when dup_last == 1 {
+      when i == total - 1 {
+        hold key_id = i - 1
+      }
+    }
+    hold line = concat("k", concat(csv_istr(key_id), concat(" = v", concat(csv_istr(i), chr(10)))))
+    hold chunk = concat(chunk, line)
+    when len(chunk) >= 1024 {
+      hold out = concat(out, chunk)
+      hold chunk = ""
+    }
+    hold i = i + 1
+  }
+  give concat(out, chunk)
+}
+
+// 1023 member rows (+ 1 header row = 1024 csv_table rows): exact upper cap accepted.
+hold doc1023 = build_doc(1023, 0)
+show ini_valid(doc1023)
+hold tab1023 = ini_parse(doc1023)
+show ini_count(tab1023)
+show ini_section_count(tab1023)
+show ini_value(tab1023, "", "k0")
+show ini_value(tab1023, "", "k14")
+show ini_value(tab1023, "s0", "k15")
+show ini_value(tab1023, "s7", "k500")
+show ini_value(tab1023, "s15", "k1022")
+show ini_round_trips(doc1023)
+
+// 1024 member rows (+ 1 header row = 1025 csv_table rows): refused cleanly.
+hold doc1024 = build_doc(1024, 0)
+show ini_valid(doc1024)
+show ini_parse(doc1024)
+
+// Duplicate key at row 1023 in the same section: refused by O(N log N) check.
+hold doc_dup_key = build_doc(1023, 1)
+show ini_valid(doc_dup_key)
+
+// Duplicate section header after 16 sections: refused.
+hold doc_dup_sec = concat(doc1023, concat("[s7]", chr(10)))
+show ini_valid(doc_dup_sec)
+
+// Interleaved ini_set across sections serializes in first-appearance order.
+hold mix = ini_new()
+hold mix = ini_set(mix, "beta", "b1", "10")
+hold mix = ini_set(mix, "alpha", "a1", "20")
+hold mix = ini_set(mix, "", "root", "1")
+hold mix = ini_set(mix, "beta", "b2", "11")
+hold mix = ini_set(mix, "alpha", "a2", "21")
+show ini_round_trips(ini_write(mix))
+show ini_section_at(mix, 0)
+show ini_section_at(mix, 1)
+show ini_section_at(mix, 2)
+show ini_value(ini_parse(ini_write(mix)), "alpha", "a2")
+show ini_value(ini_parse(ini_write(mix)), "beta", "b2")
+show "ini-scale-ok"

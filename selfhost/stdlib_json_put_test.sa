@@ -106,6 +106,27 @@ show jd_put_raw("{}", "a", "true")
 show jd_put_raw("{}", "a", " 4 ")
 // 49: and so does a created value
 show jd_put_raw("{\"a\":{}}", "a.b", " 5 ")
+// 50: a segment with an unescaped quote cannot form a JSON key (jd_check_path)
+hold badk_quote = concat("a", concat(chr(34), "b"))
+show jd_put_raw("{}", badk_quote, "1")
+// 51: an unquotable leaf segment inside a created array/object tail is refused
+hold badk_tail = concat("a.0.b", chr(34))
+show jd_put_raw("{}", badk_tail, "1")
+// 52: a raw control byte (U+0001) inside a segment is refused by jd_check_path
+hold badk_ctrl = concat("a.", chr(1))
+show jd_put_raw("{\"a\":{}}", badk_ctrl, "1")
+// 53: a raw LF byte inside a segment is refused by jd_check_path
+hold badk_lf = concat("k", chr(10))
+show jd_put_raw("{}", badk_lf, "1")
+// 54: a trailing lone backslash inside a segment is refused by jd_check_path
+hold badk_bs = concat("a", chr(92))
+show jd_put_raw("{}", badk_bs, "1")
+// 55: a truncated \u escape inside a segment is refused by jd_check_path
+hold badk_uesc = concat("0.a", concat(chr(92), "u12"))
+show jd_put_raw("[{}]", badk_uesc, "1")
+// 56: a valid JSON escape spelling inside a segment is accepted and preserved
+hold okk_esc = concat("a", concat(chr(92), "nb"))
+show jd_put_raw("{}", okk_esc, "1")
 
 // The byte length of each result, so a truncation cannot hide behind a
 // line that happens to look right.
@@ -158,6 +179,13 @@ show len(jd_put_raw("{}", "a", "\"x\""))
 show len(jd_put_raw("{}", "a", "true"))
 show len(jd_put_raw("{}", "a", " 4 "))
 show len(jd_put_raw("{\"a\":{}}", "a.b", " 5 "))
+show len(jd_put_raw("{}", badk_quote, "1"))
+show len(jd_put_raw("{}", badk_tail, "1"))
+show len(jd_put_raw("{\"a\":{}}", badk_ctrl, "1"))
+show len(jd_put_raw("{}", badk_lf, "1"))
+show len(jd_put_raw("{}", badk_bs, "1"))
+show len(jd_put_raw("[{}]", badk_uesc, "1"))
+show len(jd_put_raw("{}", okk_esc, "1"))
 
 // A created document reads back through the existing jd_* helpers, and a
 // refusal is empty and invalid rather than half-written.
@@ -184,5 +212,10 @@ show jd_flag(chk4, "0.a")
 hold chk5 = jd_put_raw("{\"a\":1}", "a.b", "2")
 show jd_valid(chk5)
 show len(chk5)
+hold chk6 = jd_put_raw("{}", okk_esc, "1")
+show jd_valid(chk6)
+show jd_num(chk6, okk_esc)
+hold chk7 = jd_put_raw("{}", badk_quote, "1")
+show jd_valid(chk7)
 
 show "json-put-ok"

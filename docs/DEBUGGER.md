@@ -137,17 +137,23 @@ stopping.
 ## What it does not do, and why
 
 The debugger debugs the **portable IR**, so it can show what the VM has:
-instructions, source offsets, registers, memory, the call stack, and program
-output in order.
+instructions, source offsets, optional emitted source-line tables, registers,
+memory, the call stack, conditional register breakpoints, and program output in
+order.
 
-* **No source line numbers.** The emitter records byte offsets, not lines, so a
-  stop is reported as an offset and a breakpoint is set on an offset. A line
-  table would have to be emitted first; inventing one here would be a claim the
-  data does not support.
+* **Source line table (`SX_LINE_MAP`).** `sxirexec debug` passes
+  `SX_LINE_MAP=<work>/lines.map` when emitting the bundle, so `line` (`l`)
+  prints the current 1-based source line and text, and `break line <n>` sets a
+  breakpoint at the first emitted instruction on or after line `<n>`. Bundles
+  built manually without `lines.map` still debug normally by offset or `ip`.
+* **Conditional breakpoints (`if <reg> <op> <val>`).** Any `break <ip>`,
+  `break src 0x<off>`, or `break line <n>` command accepts an optional
+  `if <reg> <op> <val>` suffix (`==`, `!=`, `<`, `<=`, `>`, `>=` over `A..R15`,
+  `BASE`, `F0..F3`).
 * **No variable names or types.** The portable IR has no debug information:
   what a stack slot means is known to the front end that emitted it, not to the
   VM. `mem`, `reg SP` and the frame base are what the machine offers.
-* **No conditional breakpoints, watchpoints, reverse execution or core dumps.**
+* **No watchpoints, reverse execution or core dumps.**
   Each of those is a feature with its own evidence, not a flag to be added
   quietly.
 * **No machine-binary debugging.** The subject is the portable listing, which is

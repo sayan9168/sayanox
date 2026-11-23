@@ -9,9 +9,10 @@
 //
 // A configuration file is small and it is read whole: input is capped at
 // ini_max_bytes() (65536) bytes, and the csv_table.sa caps still apply (1024
-// data rows, 262144 bytes). Malformed input is refused, never repaired:
-// ini_parse gives the single byte chr(33), which no valid table starts with,
-// and the lookups answer the empty string or -1 for a table that is not a table.
+// total rows = 1 header + 1023 member rows, 262144 bytes). Malformed input is
+// refused, never repaired: ini_parse gives the single byte chr(33), which no
+// valid table starts with, and the lookups answer the empty string or -1 for a
+// table that is not a table.
 //
 // The rules, each one pinned by selfhost/stdlib_ini_test.sa:
 //
@@ -51,34 +52,49 @@
 //   9. ini_write quotes a value exactly when ini_needs_quote says the raw bytes
 //      would not survive rules 1 to 7, which is why a value may begin with a
 //      comment marker unquoted: a written member line begins with its key.
-//
-// Byte strings, like the rest of the stdlib: a UTF-8 rune is several bytes and
-// stays several bytes. Nothing lower-cases a key or a section -- a file that
-// wants case-insensitive lookups can fold both sides through stdlib/ucase.sa at
-// the call site. ini_write quotes a value exactly when the raw bytes would not
-// survive the rules above, so parsing what was written keeps every row intact.
 
 make ini_max_bytes() -> num {
   give 65536
 }
 
-// The section a member with no section header belongs to.
 make ini_default_section() -> str {
   give ""
 }
 
-// 1 when s names that section. It is spelled the empty string, which is what a
-// member row of the default section carries in its section column.
 make ini_is_default(s: str) -> num {
   give len(s) == 0
 }
 
-// 1 when row 0 of the table is the ini header row, which is the only thing that
-// tells an ini table apart from any other csv_table, and the row that makes the
-// default section exist even when no member names it. A table that did not come
-// from ini_new -- one handed over by ct_filter_eq, say -- starts with a member
-// row instead, and then the default section is only counted when a row of its
-// own spells it.
+// Divide-and-conquer byte slice: O(span log span) instead of quadratic per-byte
+// concat on long lines, values, or packed rows.
+make ini_slice(s: str, a: num, b: num) -> str {
+  hold n = len(s)
+  hold lo = a
+  hold hi = b
+  when lo < 0 {
+    hold lo = 0
+  }
+  when hi > n {
+    hold hi = n
+  }
+  when lo >= hi {
+    give ""
+  }
+  hold span = hi - lo
+  when span <= 16 {
+    hold out = ""
+    hold i = lo
+    while i < hi {
+      hold out = concat(out, chr(sx_index(s, i)))
+      hold i = i + 1
+    }
+    give out
+  }
+  hold half = (span - span % 2) / 2
+  hold mid = lo + half
+  give concat(ini_slice(s, lo, mid), ini_slice(s, mid, hi))
+}
+
 make ini_has_header(table: str) -> num {
   when ct_valid(table) == 0 {
     give 0
@@ -89,8 +105,6 @@ make ini_has_header(table: str) -> num {
   give string_eq(csv_at(ct_row(table, 0), 0), "section")
 }
 
-// A two-part answer: a status field and a value, packed the way csv.sa packs a
-// row, so the value may be any bytes at all -- including the error marker.
 make ini_pair(status: num, value: str) -> str {
   hold out = ""
   hold out = csv_push(out, csv_istr(status))
@@ -112,8 +126,6 @@ make ini_pair_value(p: str) -> str {
   give csv_at(p, 1)
 }
 
-// Bytes [a, b) of s with a trailing CR dropped. The empty string when the range
-// is empty, which is how a blank line stays blank.
 make ini_cut(s: str, a: num, b: num) -> str {
   hold n = len(s)
   hold from = a
@@ -129,10 +141,9 @@ make ini_cut(s: str, a: num, b: num) -> str {
       hold to = to - 1
     }
   }
-  give csv_sub(s, from, to)
+  give ini_slice(s, from, to)
 }
 
-// The byte at i, or -1 outside the string.
 make ini_at(s: str, i: num) -> num {
   when i < 0 {
     give 0 - 1
@@ -143,7 +154,6 @@ make ini_at(s: str, i: num) -> num {
   give sx_index(s, i)
 }
 
-// 1 for the space bytes this module trims: chr(32) and chr(9).
 make ini_is_space(c: num) -> num {
   when c == 32 {
     give 1
@@ -154,64 +164,58 @@ make ini_is_space(c: num) -> num {
   give 0
 }
 
-// s without leading and trailing space bytes and without a trailing CR.
+make ini_skip_ws(s: str, a: num, b: num) -> num {
+  hold i = a
+  hold go = 1
+  while go == 1 {
+    when i >= b {
+      hold go = 0
+    } otherwise {
+      when ini_is_space(sx_index(s, i)) == 0 {
+        hold go = 0
+      } otherwise {
+        hold i = i + 1
+      }
+    }
+  }
+  give i
+}
+
+make ini_trim_end(s: str, a: num, b: num) -> num {
+  hold hi = b
+  hold go = 1
+  while go == 1 {
+    when hi <= a {
+      hold go = 0
+    } otherwise {
+      when ini_is_space(sx_index(s, hi - 1)) == 0 {
+        hold go = 0
+      } otherwise {
+        hold hi = hi - 1
+      }
+    }
+  }
+  when hi > a {
+    when sx_index(s, hi - 1) == 13 {
+      hold hi = hi - 1
+    }
+  }
+  give hi
+}
+
 make ini_trim(s: str) -> str {
   hold n = len(s)
-  hold a = 0
-  hold b = n
-  hold go = 1
-  while go == 1 {
-    when a >= b {
-      hold go = 0
-    } otherwise {
-      when ini_is_space(sx_index(s, a)) == 0 {
-        hold go = 0
-      } otherwise {
-        hold a = a + 1
-      }
-    }
-  }
-  hold go2 = 1
-  while go2 == 1 {
-    when b <= a {
-      hold go2 = 0
-    } otherwise {
-      when ini_is_space(sx_index(s, b - 1)) == 0 {
-        hold go2 = 0
-      } otherwise {
-        hold b = b - 1
-      }
-    }
-  }
-  when b > a {
-    when sx_index(s, b - 1) == 13 {
-      hold b = b - 1
-    }
-  }
-  give csv_sub(s, a, b)
+  hold a = ini_skip_ws(s, 0, n)
+  hold b = ini_trim_end(s, a, n)
+  give ini_slice(s, a, b)
 }
 
-// s without its leading space bytes.
 make ini_ltrim(s: str) -> str {
   hold n = len(s)
-  hold a = 0
-  hold go = 1
-  while go == 1 {
-    when a >= n {
-      hold go = 0
-    } otherwise {
-      when ini_is_space(sx_index(s, a)) == 0 {
-        hold go = 0
-      } otherwise {
-        hold a = a + 1
-      }
-    }
-  }
-  give csv_sub(s, a, n)
+  hold a = ini_skip_ws(s, 0, n)
+  give ini_slice(s, a, n)
 }
 
-// The offset of the first chr(10) at or after pos, or len(s) when there is
-// none. The line starting at pos is then [pos, that offset).
 make ini_eol(s: str, pos: num) -> num {
   hold n = len(s)
   hold i = pos
@@ -230,7 +234,6 @@ make ini_eol(s: str, pos: num) -> num {
   give i
 }
 
-// The offset of the first byte equal to want, or -1.
 make ini_first_byte(s: str, want: num) -> num {
   hold n = len(s)
   hold i = 0
@@ -243,67 +246,76 @@ make ini_first_byte(s: str, want: num) -> num {
   give 0 - 1
 }
 
-// The value of one member, decoded under rule 5. Refused when a quoted value
-// carries a backslash that starts no known escape, or an inner quote.
-make ini_decode(raw: str) -> str {
-  hold n = len(raw)
+make ini_find_in_span(s: str, a: num, b: num, want: num) -> num {
+  hold i = a
+  while i < b {
+    when sx_index(s, i) == want {
+      give i
+    }
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
+make ini_decode_span(s: str, a: num, b: num) -> str {
+  hold span = b - a
   hold quoted = 0
-  when n >= 2 {
-    when sx_index(raw, 0) == 34 {
-      when sx_index(raw, n - 1) == 34 {
+  when span >= 2 {
+    when sx_index(s, a) == 34 {
+      when sx_index(s, b - 1) == 34 {
         hold quoted = 1
       }
     }
   }
   when quoted == 0 {
-    give ini_pair(1, raw)
+    give ini_pair(1, ini_slice(s, a, b))
   }
-  hold body = csv_sub(raw, 1, n - 1)
-  hold m = len(body)
+  hold m = b - 1
   hold acc = ""
-  hold i = 0
+  hold chunk = ""
+  hold i = a + 1
   hold bad = 0
   hold go = 1
   while go == 1 {
     when i >= m {
       hold go = 0
     } otherwise {
-      hold c = sx_index(body, i)
+      hold c = sx_index(s, i)
       when c == 34 {
         hold bad = 1
       } otherwise {
         when c != 92 {
-          hold acc = concat(acc, chr(c))
+          hold chunk = concat(chunk, chr(c))
           hold i = i + 1
         } otherwise {
           hold moved = 0
           when i + 1 < m {
-            hold e = sx_index(body, i + 1)
+            hold e = sx_index(s, i + 1)
             when e == 92 {
-              hold acc = concat(acc, chr(92))
+              hold chunk = concat(chunk, chr(92))
               hold moved = 1
             }
             when moved == 0 {
               when e == 34 {
-                hold acc = concat(acc, chr(34))
+                hold chunk = concat(chunk, chr(34))
                 hold moved = 1
               }
             }
             when moved == 0 {
               when e == 110 {
-                hold acc = concat(acc, chr(10))
+                hold chunk = concat(chunk, chr(10))
                 hold moved = 1
               }
             }
             when moved == 0 {
               when e == 114 {
-                hold acc = concat(acc, chr(13))
+                hold chunk = concat(chunk, chr(13))
                 hold moved = 1
               }
             }
             when moved == 0 {
               when e == 116 {
-                hold acc = concat(acc, chr(9))
+                hold chunk = concat(chunk, chr(9))
                 hold moved = 1
               }
             }
@@ -315,6 +327,10 @@ make ini_decode(raw: str) -> str {
           }
         }
       }
+      when len(chunk) >= 64 {
+        hold acc = concat(acc, chunk)
+        hold chunk = ""
+      }
       when bad == 1 {
         hold go = 0
       }
@@ -323,113 +339,70 @@ make ini_decode(raw: str) -> str {
   when bad == 1 {
     give ini_pair(0, "")
   }
-  give ini_pair(1, acc)
+  give ini_pair(1, concat(acc, chunk))
 }
 
-// 1 when s may be a key: not empty, and carrying none of the bytes that would
-// move a line boundary or a split point once the file is written back out. A
-// bracket is refused for the same reason -- ini_write puts a key at the start of
-// a line, and a line that starts with chr(91) is read back as a section header.
+make ini_decode(raw: str) -> str {
+  give ini_decode_span(raw, 0, len(raw))
+}
+
+make ini_span_ok(s: str, a: num, b: num) -> num {
+  hold i = a
+  while i < b {
+    hold c = sx_index(s, i)
+    when c == 61 {
+      give 0
+    }
+    when c == 10 {
+      give 0
+    }
+    when c == 13 {
+      give 0
+    }
+    when c == 91 {
+      give 0
+    }
+    when c == 93 {
+      give 0
+    }
+    hold i = i + 1
+  }
+  give 1
+}
+
 make ini_key_ok(s: str) -> num {
   when len(s) == 0 {
     give 0
   }
-  hold n = len(s)
-  hold i = 0
-  while i < n {
-    hold c = sx_index(s, i)
-    when c == 61 {
-      give 0
-    }
-    when c == 10 {
-      give 0
-    }
-    when c == 13 {
-      give 0
-    }
-    when c == 91 {
-      give 0
-    }
-    when c == 93 {
-      give 0
-    }
-    hold i = i + 1
-  }
-  give 1
+  give ini_span_ok(s, 0, len(s))
 }
 
-// 1 when s may be a section name: none of the bytes a header line could not
-// carry. A name holding a bracket would be read back as a different header line.
-// The empty name is legal and means the default section -- ini_write spells it
-// by omitting the header line and the table stores it as an empty field -- while
-// a header line that carries an empty name is refused by ini_header.
 make ini_section_ok(s: str) -> num {
-  hold n = len(s)
-  hold i = 0
-  while i < n {
-    hold c = sx_index(s, i)
-    when c == 61 {
-      give 0
-    }
-    when c == 10 {
-      give 0
-    }
-    when c == 13 {
-      give 0
-    }
-    when c == 91 {
-      give 0
-    }
-    when c == 93 {
-      give 0
-    }
-    hold i = i + 1
-  }
-  give 1
+  give ini_span_ok(s, 0, len(s))
 }
 
-// A header line's name, from a line that starts with chr(91). Refused when the
-// bracket is never closed, when anything but spaces follows it, or when the name
-// itself could not be written back out.
 make ini_header(line: str) -> str {
   hold n = len(line)
-  hold close = 0
-  hold i = 0
-  hold go = 1
-  while go == 1 {
-    when i >= n {
-      hold go = 0
-    } otherwise {
-      when sx_index(line, i) == 93 {
-        hold close = i
-        hold go = 0
-      } otherwise {
-        hold i = i + 1
-      }
-    }
-  }
+  hold close = ini_find_in_span(line, 1, n, 93)
   when close < 1 {
     give ini_pair(0, "")
   }
-  hold rest = ini_trim(csv_sub(line, close + 1, n))
-  when len(rest) > 0 {
+  hold ra = ini_skip_ws(line, close + 1, n)
+  hold rb = ini_trim_end(line, ra, n)
+  when rb > ra {
     give ini_pair(0, "")
   }
-  hold name = ini_trim(csv_sub(line, 1, close))
-  when len(name) == 0 {
+  hold na = ini_skip_ws(line, 1, close)
+  hold nb = ini_trim_end(line, na, close)
+  when nb <= na {
     give ini_pair(0, "")
   }
-  when ini_section_ok(name) == 0 {
+  when ini_span_ok(line, na, nb) == 0 {
     give ini_pair(0, "")
   }
-  give ini_pair(1, name)
+  give ini_pair(1, ini_slice(line, na, nb))
 }
 
-// 1 when ini_write must quote this value, because the raw bytes would not be
-// read back as themselves: a leading or trailing space byte would be trimmed, a
-// quote or a backslash would be read as quoting or escaping, and a line
-// terminator would end the line. An empty value is quoted for legibility, and
-// it survives the round trip either way.
 make ini_needs_quote(s: str) -> num {
   hold n = len(s)
   when n == 0 {
@@ -461,9 +434,6 @@ make ini_needs_quote(s: str) -> num {
   give 0
 }
 
-// The written form of one value: quoted only when ini_needs_quote says so, with
-// the four escape pairs of rule 5 built from chr so this file carries no escape
-// sequence of its own to get wrong.
 make ini_quote(s: str) -> str {
   when ini_needs_quote(s) == 0 {
     give s
@@ -471,41 +441,41 @@ make ini_quote(s: str) -> str {
   hold q = chr(34)
   hold b = chr(92)
   hold out = q
+  hold chunk = ""
   hold n = len(s)
   hold i = 0
   while i < n {
     hold c = sx_index(s, i)
     when c == 92 {
-      hold out = concat(out, concat(b, b))
+      hold chunk = concat(chunk, concat(b, b))
     } otherwise {
       when c == 34 {
-        hold out = concat(out, concat(b, q))
+        hold chunk = concat(chunk, concat(b, q))
       } otherwise {
         when c == 10 {
-          hold out = concat(out, concat(b, chr(110)))
+          hold chunk = concat(chunk, concat(b, chr(110)))
         } otherwise {
           when c == 13 {
-            hold out = concat(out, concat(b, chr(114)))
+            hold chunk = concat(chunk, concat(b, chr(114)))
           } otherwise {
             when c == 9 {
-              hold out = concat(out, concat(b, chr(116)))
+              hold chunk = concat(chunk, concat(b, chr(116)))
             } otherwise {
-              hold out = concat(out, chr(c))
+              hold chunk = concat(chunk, chr(c))
             }
           }
         }
       }
     }
+    when len(chunk) >= 64 {
+      hold out = concat(out, chunk)
+      hold chunk = ""
+    }
     hold i = i + 1
   }
-  give concat(out, q)
+  give concat(concat(out, chunk), q)
 }
 
-// Put one packed row in front of member row `at` (rows are numbered from 0, and
-// member rows start after the header): rows [0, at) keep their place, the new row
-// follows them, rows [at, count) shift one down. Used for a new member of the
-// default section, which ini_write must print before any header line. Returns
-// "!" for a table that is not one, a row it cannot hold, or a size cap crossed.
 make ini_insert_at(table: str, at: num, row: str) -> str {
   when ct_valid(table) == 0 {
     give "!"
@@ -523,13 +493,8 @@ make ini_insert_at(table: str, at: num, row: str) -> str {
   when at > total - 1 {
     give "!"
   }
-  // k walks the destination table rows -- total + 1 of them, one more than the
-  // source -- and rebuilds the table from the rows themselves: ct_row hands back
-  // a row as the table stores it, and csv_push frames it again, so the result is
-  // a table and not a doubled row. The header is re-framed like any other row,
-  // which is what keeps it row 0; the new member takes destination row at + 1,
-  // and the member it displaces is read from source row at.
   hold out = ""
+  hold chunk = ""
   hold k = 0
   while k <= total {
     hold src = k
@@ -540,19 +505,23 @@ make ini_insert_at(table: str, at: num, row: str) -> str {
     when k == at + 1 {
       hold piece = row
     }
-    hold out = csv_push(out, piece)
-    when len(out) > 262144 {
+    hold chunk = csv_push(chunk, piece)
+    when len(chunk) >= 2048 {
+      hold out = concat(out, chunk)
+      hold chunk = ""
+    }
+    when len(out) + len(chunk) > 262144 {
       give "!"
     }
     hold k = k + 1
   }
+  hold out = concat(out, chunk)
   when csv_count(out) > 1024 {
     give "!"
   }
   give out
 }
 
-// The header row every ini table starts with.
 make ini_header_row() -> str {
   hold row = ""
   hold row = csv_push(row, "section")
@@ -561,14 +530,10 @@ make ini_header_row() -> str {
   give row
 }
 
-// A new table: the header row and nothing else.
 make ini_new() -> str {
   give ct_append("", ini_header_row())
 }
 
-// Number of member rows, header excluded; -1 for something that is no table.
-// A table with no members at all is not empty -- ini_new() is one row, its
-// header -- so ini_empty is the test for "nothing inside".
 make ini_count(table: str) -> num {
   hold rows = ct_row_count(table)
   when rows < 1 {
@@ -577,12 +542,6 @@ make ini_count(table: str) -> num {
   give rows - 1
 }
 
-// The index of the first member row of a section, or -1. Member rows are
-// numbered from 0, and row 0 of the table is the header. The default section is
-// answered 0 even when it holds no member -- that is where ini_write puts its
-// rows -- but only for a table that carries the header row, which is the row
-// that gives the default section its place; the scan of a named section starts
-// after the header either way.
 make ini_find_section(table: str, section: str) -> num {
   hold rows = ini_count(table)
   when ini_is_default(section) == 1 {
@@ -590,36 +549,54 @@ make ini_find_section(table: str, section: str) -> num {
       give 0
     }
   }
-  hold i = 0
-  while i < rows {
-    when string_eq(csv_at(ct_row(table, i + 1), 0), section) == 1 {
-      give i
-    }
-    hold i = i + 1
+  when rows <= 0 {
+    give 0 - 1
   }
-  give 0 - 1
-}
-
-// The index of a member row, or -1. Row 0 is not searched: ini_count does not
-// count it, and its three fields are the column names, which no ini_parse row
-// can carry as a key -- an empty key is refused and a header's own labels are
-// never written into a member.
-make ini_find(table: str, section: str, key: str) -> num {
-  hold rows = ini_count(table)
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
   hold i = 0
   while i < rows {
-    hold row = ct_row(table, i + 1)
-    when string_eq(csv_at(row, 0), section) == 1 {
-      when string_eq(csv_at(row, 1), key) == 1 {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    hold slen = c0[1] - c0[0]
+    when slen == len(section) {
+      when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
         give i
       }
     }
+    hold pos = rf[1]
     hold i = i + 1
   }
   give 0 - 1
 }
 
-// 1 when the member is there, 0 when it is not, -1 for a table that is not one.
+make ini_find(table: str, section: str, key: str) -> num {
+  hold rows = ini_count(table)
+  when rows <= 0 {
+    give 0 - 1
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold i = 0
+  while i < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] - c0[0] == len(section) {
+      hold c1 = ct_frame(table, c0[1])
+      when c1[1] - c1[0] == len(key) {
+        when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+          when string_eq(ini_slice(table, c1[0], c1[1]), key) == 1 {
+            give i
+          }
+        }
+      }
+    }
+    hold pos = rf[1]
+    hold i = i + 1
+  }
+  give 0 - 1
+}
+
 make ini_has(table: str, section: str, key: str) -> num {
   when ct_valid(table) == 0 {
     give 0 - 1
@@ -631,87 +608,301 @@ make ini_has(table: str, section: str, key: str) -> num {
   give 1
 }
 
-// A member value, or the empty string when it is absent.
 make ini_value(table: str, section: str, key: str) -> str {
   when ct_valid(table) == 0 {
     give ""
   }
-  hold at = ini_find(table, section, key)
-  when at < 0 {
+  hold rows = ini_count(table)
+  when rows <= 0 {
     give ""
   }
-  give csv_at(ct_row(table, at + 1), 2)
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold i = 0
+  while i < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] - c0[0] == len(section) {
+      hold c1 = ct_frame(table, c0[1])
+      when c1[1] - c1[0] == len(key) {
+        when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+          when string_eq(ini_slice(table, c1[0], c1[1]), key) == 1 {
+            hold c2 = ct_frame(table, c1[1])
+            give ini_slice(table, c2[0], c2[1])
+          }
+        }
+      }
+    }
+    hold pos = rf[1]
+    hold i = i + 1
+  }
+  give ""
 }
 
-// Parse configuration text into a packed table. The error marker is chr(33).
+// ---- O(N log N) pure-min span hashing and merge-sort duplicate detector ----
+// Each record in recs is 5 numbers: [hash, sa, sb, ka, kb].
+// Hash stays under 2^26 (67108864) so h * 131 + c < 2^34 is exact in both C
+// IEEE-754 double and 64-bit native integer arithmetic.
+
+make ini_hash_span(s: str, a: num, b: num, seed: num) -> num {
+  hold h = seed
+  hold i = a
+  while i < b {
+    hold h = (h * 131 + sx_index(s, i) + 1) % 67108864
+    hold i = i + 1
+  }
+  give h
+}
+
+make ini_rec_cmp(s: str, recs: list, bi: num, bj: num) -> num {
+  hold hi = recs[bi]
+  hold hj = recs[bj]
+  when hi < hj {
+    give 0 - 1
+  }
+  when hi > hj {
+    give 1
+  }
+  hold sa1 = recs[bi + 1]
+  hold sb1 = recs[bi + 2]
+  hold sa2 = recs[bj + 1]
+  hold sb2 = recs[bj + 2]
+  hold sl1 = sb1 - sa1
+  hold sl2 = sb2 - sa2
+  when sl1 < sl2 {
+    give 0 - 1
+  }
+  when sl1 > sl2 {
+    give 1
+  }
+  hold k = 0
+  while k < sl1 {
+    hold c1 = sx_index(s, sa1 + k)
+    hold c2 = sx_index(s, sa2 + k)
+    when c1 < c2 {
+      give 0 - 1
+    }
+    when c1 > c2 {
+      give 1
+    }
+    hold k = k + 1
+  }
+  hold ka1 = recs[bi + 3]
+  hold kb1 = recs[bi + 4]
+  hold ka2 = recs[bj + 3]
+  hold kb2 = recs[bj + 4]
+  hold kl1 = kb1 - ka1
+  hold kl2 = kb2 - ka2
+  when kl1 < kl2 {
+    give 0 - 1
+  }
+  when kl1 > kl2 {
+    give 1
+  }
+  hold m = 0
+  while m < kl1 {
+    hold d1 = sx_index(s, ka1 + m)
+    hold d2 = sx_index(s, ka2 + m)
+    when d1 < d2 {
+      give 0 - 1
+    }
+    when d1 > d2 {
+      give 1
+    }
+    hold m = m + 1
+  }
+  give 0
+}
+
+make ini_push_rec5(dst: list, src: list, base: num) -> list {
+  hold out = push(dst, src[base])
+  hold out = push(out, src[base + 1])
+  hold out = push(out, src[base + 2])
+  hold out = push(out, src[base + 3])
+  hold out = push(out, src[base + 4])
+  give out
+}
+
+// Returns 1 if any two 5-tuples in recs have identical (section, key) bytes in s.
+make ini_has_dup_5(s: str, recs: list) -> num {
+  hold count = len(recs) / 5
+  when count <= 1 {
+    give 0
+  }
+  hold cur = recs
+  hold width = 1
+  while width < count {
+    hold nxt = []
+    hold left = 0
+    while left < count {
+      hold mid = left + width
+      when mid > count {
+        hold mid = count
+      }
+      hold right = mid + width
+      when right > count {
+        hold right = count
+      }
+      hold i = left
+      hold j = mid
+      while i < mid {
+        when j >= right {
+          hold nxt = ini_push_rec5(nxt, cur, i * 5)
+          hold i = i + 1
+        } otherwise {
+          hold cmp = ini_rec_cmp(s, cur, i * 5, j * 5)
+          when cmp == 0 {
+            give 1
+          }
+          when cmp < 0 {
+            hold nxt = ini_push_rec5(nxt, cur, i * 5)
+            hold i = i + 1
+          } otherwise {
+            hold nxt = ini_push_rec5(nxt, cur, j * 5)
+            hold j = j + 1
+          }
+        }
+      }
+      while j < right {
+        hold nxt = ini_push_rec5(nxt, cur, j * 5)
+        hold j = j + 1
+      }
+      hold left = right
+    }
+    hold cur = nxt
+    hold width = width * 2
+  }
+  give 0
+}
+
+// Parse configuration text into a packed table in O(N log N) time.
+// The error marker is chr(33).
 make ini_parse(text: str) -> str {
   when len(text) > ini_max_bytes() {
     give "!"
   }
-  hold table = ini_new()
-  hold section = ini_default_section()
+  hold out = ini_new()
+  hold mid_buf = ""
+  hold chunk_buf = ""
+  hold total_bytes = len(out)
+  hold member_count = 0
+  hold sec_str = ""
+  hold sec_a = 0
+  hold sec_b = 0
+  hold sec_hash = 5381
+  hold secs = []
+  hold keys = []
   hold n = len(text)
   hold pos = 0
   hold bad = 0
-  hold skip = 1
   hold go = 1
   while go == 1 {
-    hold stop = ini_eol(text, pos)
-    hold line = ini_cut(text, pos, stop)
+    hold lstart = pos
+    hold stop = ini_eol(text, lstart)
+    hold lend = stop
+    when lend > lstart {
+      when sx_index(text, lend - 1) == 13 {
+        hold lend = lend - 1
+      }
+    }
     hold pos = stop + 1
-    hold body = ini_ltrim(line)
-    hold c = ini_at(body, 0)
-    when len(body) == 0 {
+    hold a = ini_skip_ws(text, lstart, lend)
+    hold skip = 0
+    when a >= lend {
       hold skip = 1
     } otherwise {
-      when c == 59 {
+      hold c0 = sx_index(text, a)
+      when c0 == 59 {
         hold skip = 1
-      } otherwise {
-        when c == 35 {
-          hold skip = 1
-        } otherwise {
-          hold skip = 0
-        }
+      }
+      when c0 == 35 {
+        hold skip = 1
       }
     }
     when skip == 0 {
+      hold c = sx_index(text, a)
       when c == 91 {
-        hold head = ini_header(body)
-        when ini_pair_ok(head) == 0 {
+        hold close = ini_find_in_span(text, a + 1, lend, 93)
+        when close < a + 1 {
           hold bad = 1
         } otherwise {
-          hold name = ini_pair_value(head)
-          when ini_find_section(table, name) >= 0 {
+          hold ra = ini_skip_ws(text, close + 1, lend)
+          hold rb = ini_trim_end(text, ra, lend)
+          when rb > ra {
             hold bad = 1
           } otherwise {
-            hold section = name
+            hold na = ini_skip_ws(text, a + 1, close)
+            hold nb = ini_trim_end(text, na, close)
+            when nb <= na {
+              hold bad = 1
+            } otherwise {
+              when ini_span_ok(text, na, nb) == 0 {
+                hold bad = 1
+              } otherwise {
+                hold sh = ini_hash_span(text, na, nb, 5381)
+                hold secs = push(secs, sh)
+                hold secs = push(secs, na)
+                hold secs = push(secs, nb)
+                hold secs = push(secs, 0)
+                hold secs = push(secs, 0)
+                hold sec_a = na
+                hold sec_b = nb
+                hold sec_hash = sh
+                hold sec_str = ini_slice(text, na, nb)
+              }
+            }
           }
         }
       } otherwise {
-        hold eq = ini_first_byte(body, 61)
+        hold eq = ini_find_in_span(text, a, lend, 61)
         when eq < 0 {
           hold bad = 1
         } otherwise {
-          hold key = ini_trim(csv_sub(body, 0, eq))
-          hold raw = ini_trim(csv_sub(body, eq + 1, len(body)))
-          when ini_key_ok(key) == 0 {
+          hold ka = ini_skip_ws(text, a, eq)
+          hold kb = ini_trim_end(text, ka, eq)
+          when kb <= ka {
             hold bad = 1
           } otherwise {
-            hold got = ini_decode(raw)
-            when ini_pair_ok(got) == 0 {
+            when ini_span_ok(text, ka, kb) == 0 {
               hold bad = 1
             } otherwise {
-              hold value = ini_pair_value(got)
-              when ini_has(table, section, key) == 1 {
+              hold va = ini_skip_ws(text, eq + 1, lend)
+              hold vb = ini_trim_end(text, va, lend)
+              hold got = ini_decode_span(text, va, vb)
+              when ini_pair_ok(got) == 0 {
                 hold bad = 1
               } otherwise {
-                hold row = ""
-                hold row = csv_push(row, section)
-                hold row = csv_push(row, key)
-                hold row = csv_push(row, value)
-                hold table = ct_append(table, row)
-                when string_eq(table, "!") == 1 {
+                hold member_count = member_count + 1
+                when member_count > 1023 {
                   hold bad = 1
+                } otherwise {
+                  hold kh = ini_hash_span(text, ka, kb, (sec_hash * 131 + 257) % 67108864)
+                  hold keys = push(keys, kh)
+                  hold keys = push(keys, sec_a)
+                  hold keys = push(keys, sec_b)
+                  hold keys = push(keys, ka)
+                  hold keys = push(keys, kb)
+                  hold key_str = ini_slice(text, ka, kb)
+                  hold val_str = ini_pair_value(got)
+                  hold row = ""
+                  hold row = csv_push(row, sec_str)
+                  hold row = csv_push(row, key_str)
+                  hold row = csv_push(row, val_str)
+                  hold framed = csv_push("", row)
+                  hold total_bytes = total_bytes + len(framed)
+                  when total_bytes > 262144 {
+                    hold bad = 1
+                  } otherwise {
+                    hold chunk_buf = concat(chunk_buf, framed)
+                    when len(chunk_buf) >= 1024 {
+                      hold mid_buf = concat(mid_buf, chunk_buf)
+                      hold chunk_buf = ""
+                      when len(mid_buf) >= 16384 {
+                        hold out = concat(out, mid_buf)
+                        hold mid_buf = ""
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -729,10 +920,15 @@ make ini_parse(text: str) -> str {
   when bad == 1 {
     give "!"
   }
-  give table
+  when ini_has_dup_5(text, secs) == 1 {
+    give "!"
+  }
+  when ini_has_dup_5(text, keys) == 1 {
+    give "!"
+  }
+  give concat(out, concat(mid_buf, chunk_buf))
 }
 
-// 1 when the text parses, 0 when it does not.
 make ini_valid(text: str) -> num {
   hold t = ini_parse(text)
   when len(t) == 0 {
@@ -744,34 +940,92 @@ make ini_valid(text: str) -> num {
   give 1
 }
 
-// Parse and look up in one step, for a caller that reads the file once.
 make ini_get_text(text: str, section: str, key: str) -> str {
   give ini_value(ini_parse(text), section, key)
 }
 
-// How many distinct sections the table holds, in order of first appearance with
-// the default section always first: for an ini table it counts once whether or
-// not a member names it, because ini_write gives it the head of the file.
 make ini_section_count(table: str) -> num {
   hold rows = ini_count(table)
-  hold i = 0
-  hold count = ini_has_header(table)
-  while i < rows {
-    hold sec = csv_at(ct_row(table, i + 1), 0)
-    when ini_is_default(sec) == 1 {
-      hold i = i + 1
-    } otherwise {
-      when ini_find_section(table, sec) == i {
-        hold count = count + 1
-      }
-      hold i = i + 1
-    }
+  when rows < 0 {
+    give 0
   }
-  give count
+  hold count = ini_has_header(table)
+  when rows == 0 {
+    give count
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold seen = []
+  hold i = 0
+  while i < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] > c0[0] {
+      hold sh = ini_hash_span(table, c0[0], c0[1], 5381)
+      hold seen = push(seen, sh)
+      hold seen = push(seen, c0[0])
+      hold seen = push(seen, c0[1])
+      hold seen = push(seen, 0)
+      hold seen = push(seen, 0)
+    }
+    hold pos = rf[1]
+    hold i = i + 1
+  }
+  hold m = len(seen) / 5
+  when m == 0 {
+    give count
+  }
+  // Sort 5-tuples so identical section spans sit adjacent, then count runs.
+  hold cur = seen
+  hold width = 1
+  while width < m {
+    hold nxt = []
+    hold left = 0
+    while left < m {
+      hold mid = left + width
+      when mid > m {
+        hold mid = m
+      }
+      hold right = mid + width
+      when right > m {
+        hold right = m
+      }
+      hold x = left
+      hold y = mid
+      while x < mid {
+        when y >= right {
+          hold nxt = ini_push_rec5(nxt, cur, x * 5)
+          hold x = x + 1
+        } otherwise {
+          when ini_rec_cmp(table, cur, x * 5, y * 5) <= 0 {
+            hold nxt = ini_push_rec5(nxt, cur, x * 5)
+            hold x = x + 1
+          } otherwise {
+            hold nxt = ini_push_rec5(nxt, cur, y * 5)
+            hold y = y + 1
+          }
+        }
+      }
+      while y < right {
+        hold nxt = ini_push_rec5(nxt, cur, y * 5)
+        hold y = y + 1
+      }
+      hold left = right
+    }
+    hold cur = nxt
+    hold width = width * 2
+  }
+  hold distinct = 1
+  hold k = 1
+  while k < m {
+    when ini_rec_cmp(table, cur, (k - 1) * 5, k * 5) != 0 {
+      hold distinct = distinct + 1
+    }
+    hold k = k + 1
+  }
+  give count + distinct
 }
 
-// The i-th section name in that order; 0 is the default section, whose name is
-// the empty string, and the answer past the end is the empty string too.
 make ini_section_at(table: str, i: num) -> str {
   hold rows = ini_count(table)
   when i == 0 {
@@ -779,65 +1033,81 @@ make ini_section_at(table: str, i: num) -> str {
       give ""
     }
   }
+  when rows <= 0 {
+    give ""
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
   hold k = 0
   hold seen = ini_has_header(table)
   while k < rows {
-    hold sec = csv_at(ct_row(table, k + 1), 0)
-    when ini_is_default(sec) == 1 {
-      hold k = k + 1
-    } otherwise {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] > c0[0] {
+      hold sec = ini_slice(table, c0[0], c0[1])
       when ini_find_section(table, sec) == k {
         when seen == i {
           give sec
         }
         hold seen = seen + 1
       }
-      hold k = k + 1
     }
-  }
-  give ""
-}
-
-// How many members a section holds.
-make ini_key_count(table: str, section: str) -> num {
-  hold rows = ini_count(table)
-  hold i = 0
-  hold count = 0
-  while i < rows {
-    when string_eq(csv_at(ct_row(table, i + 1), 0), section) == 1 {
-      hold count = count + 1
-    }
-    hold i = i + 1
-  }
-  give count
-}
-
-// The i-th key of a section, in document order, or the empty string past the
-// end. ini_parse never stores an empty key, so "" only ever means absent.
-make ini_key_at(table: str, section: str, i: num) -> str {
-  hold rows = ini_count(table)
-  hold k = 0
-  hold seen = 0
-  while k < rows {
-    hold row = ct_row(table, k + 1)
-    when string_eq(csv_at(row, 0), section) == 1 {
-      when seen == i {
-        give csv_at(row, 1)
-      }
-      hold seen = seen + 1
-    }
+    hold pos = rf[1]
     hold k = k + 1
   }
   give ""
 }
 
-// Set one member. An existing row keeps its place; a new one goes to the end of
-// the table, except in the default section, where it goes to the head -- that is
-// where ini_write prints those members, ahead of the first header line, and a
-// writer that appended them would move them behind every section in the file.
-// Functional: the input table is never modified. The error marker comes back for
-// a table that is not one, an empty or unsplittable key, or a section name a
-// header line could not carry.
+make ini_key_count(table: str, section: str) -> num {
+  hold rows = ini_count(table)
+  when rows <= 0 {
+    give 0
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold i = 0
+  hold count = 0
+  while i < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] - c0[0] == len(section) {
+      when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+        hold count = count + 1
+      }
+    }
+    hold pos = rf[1]
+    hold i = i + 1
+  }
+  give count
+}
+
+make ini_key_at(table: str, section: str, i: num) -> str {
+  hold rows = ini_count(table)
+  when rows <= 0 {
+    give ""
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold k = 0
+  hold seen = 0
+  while k < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    when c0[1] - c0[0] == len(section) {
+      when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+        hold c1 = ct_frame(table, c0[1])
+        when seen == i {
+          give ini_slice(table, c1[0], c1[1])
+        }
+        hold seen = seen + 1
+      }
+    }
+    hold pos = rf[1]
+    hold k = k + 1
+  }
+  give ""
+}
+
 make ini_set(table: str, section: str, key: str, value: str) -> str {
   when ct_valid(table) == 0 {
     give "!"
@@ -862,57 +1132,81 @@ make ini_set(table: str, section: str, key: str, value: str) -> str {
   give ct_append(table, row)
 }
 
-// Drop every row of one section and key, keeping the rest in order. Dropping a
-// member the table does not hold leaves it intact; the header always survives.
 make ini_unset(table: str, section: str, key: str) -> str {
   when ct_valid(table) == 0 {
     give "!"
   }
   hold out = ini_new()
+  hold chunk = ""
   hold rows = ini_count(table)
+  when rows <= 0 {
+    give out
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
   hold i = 0
   while i < rows {
-    hold row = ct_row(table, i + 1)
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    hold c1 = ct_frame(table, c0[1])
     hold keep = 1
-    when string_eq(csv_at(row, 0), section) == 1 {
-      when string_eq(csv_at(row, 1), key) == 1 {
-        hold keep = 0
+    when c0[1] - c0[0] == len(section) {
+      when c1[1] - c1[0] == len(key) {
+        when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+          when string_eq(ini_slice(table, c1[0], c1[1]), key) == 1 {
+            hold keep = 0
+          }
+        }
       }
     }
     when keep == 1 {
-      hold out = ct_append(out, row)
-      when string_eq(out, "!") == 1 {
-        give "!"
+      hold chunk = concat(chunk, ini_slice(table, pos, rf[1]))
+      when len(chunk) >= 2048 {
+        hold out = concat(out, chunk)
+        hold chunk = ""
       }
     }
+    hold pos = rf[1]
     hold i = i + 1
   }
-  give out
+  give concat(out, chunk)
 }
 
-// Drop every row of one section.
 make ini_drop_section(table: str, section: str) -> str {
   when ct_valid(table) == 0 {
     give "!"
   }
   hold out = ini_new()
+  hold chunk = ""
   hold rows = ini_count(table)
+  when rows <= 0 {
+    give out
+  }
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
   hold i = 0
   while i < rows {
-    hold row = ct_row(table, i + 1)
-    when string_eq(csv_at(row, 0), section) == 0 {
-      hold out = ct_append(out, row)
-      when string_eq(out, "!") == 1 {
-        give "!"
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    hold match = 0
+    when c0[1] - c0[0] == len(section) {
+      when string_eq(ini_slice(table, c0[0], c0[1]), section) == 1 {
+        hold match = 1
       }
     }
+    when match == 0 {
+      hold chunk = concat(chunk, ini_slice(table, pos, rf[1]))
+      when len(chunk) >= 2048 {
+        hold out = concat(out, chunk)
+        hold chunk = ""
+      }
+    }
+    hold pos = rf[1]
     hold i = i + 1
   }
-  give out
+  give concat(out, chunk)
 }
 
-// 1 when the table holds nothing but its header row, 0 when it holds members,
-// and 0 for something that is no table at all.
 make ini_empty(table: str) -> num {
   when ini_count(table) == 0 {
     give 1
@@ -920,45 +1214,252 @@ make ini_empty(table: str) -> num {
   give 0
 }
 
-// Canonical configuration text: sections in the order rule 8 enumerates them,
-// each member as key space equals space value, a header line before each section
-// and no blank line inside one. Members of the default section come first and
-// carry no header line of their own. A comment line read from a file is not kept
-// -- the table has nowhere to put it -- so ini_write is a canonicalisation of
-// what was parsed, not a formatting-preserving edit of the text.
+// Sort 2-tuples [min_row, row_idx] lexicographically for O(R log R) section-order
+// serialization in ini_write.
+make ini_sort_pairs(pairs: list) -> list {
+  hold count = len(pairs) / 2
+  when count <= 1 {
+    give pairs
+  }
+  hold cur = pairs
+  hold width = 1
+  while width < count {
+    hold nxt = []
+    hold left = 0
+    while left < count {
+      hold mid = left + width
+      when mid > count {
+        hold mid = count
+      }
+      hold right = mid + width
+      when right > count {
+        hold right = count
+      }
+      hold i = left
+      hold j = mid
+      while i < mid {
+        when j >= right {
+          hold nxt = push(nxt, cur[i * 2])
+          hold nxt = push(nxt, cur[i * 2 + 1])
+          hold i = i + 1
+        } otherwise {
+          hold a0 = cur[i * 2]
+          hold b0 = cur[j * 2]
+          hold take_left = 0
+          when a0 < b0 {
+            hold take_left = 1
+          }
+          when a0 == b0 {
+            when cur[i * 2 + 1] <= cur[j * 2 + 1] {
+              hold take_left = 1
+            }
+          }
+          when take_left == 1 {
+            hold nxt = push(nxt, cur[i * 2])
+            hold nxt = push(nxt, cur[i * 2 + 1])
+            hold i = i + 1
+          } otherwise {
+            hold nxt = push(nxt, cur[j * 2])
+            hold nxt = push(nxt, cur[j * 2 + 1])
+            hold j = j + 1
+          }
+        }
+      }
+      while j < right {
+        hold nxt = push(nxt, cur[j * 2])
+        hold nxt = push(nxt, cur[j * 2 + 1])
+        hold j = j + 1
+      }
+      hold left = right
+    }
+    hold cur = nxt
+    hold width = width * 2
+  }
+  give cur
+}
+
+make ini_sec5_cmp(s: str, recs: list, bi: num, bj: num) -> num {
+  hold hi = recs[bi]
+  hold hj = recs[bj]
+  when hi < hj {
+    give 0 - 1
+  }
+  when hi > hj {
+    give 1
+  }
+  hold sa1 = recs[bi + 1]
+  hold sb1 = recs[bi + 2]
+  hold sa2 = recs[bj + 1]
+  hold sb2 = recs[bj + 2]
+  hold sl1 = sb1 - sa1
+  hold sl2 = sb2 - sa2
+  when sl1 < sl2 {
+    give 0 - 1
+  }
+  when sl1 > sl2 {
+    give 1
+  }
+  hold k = 0
+  while k < sl1 {
+    hold c1 = sx_index(s, sa1 + k)
+    hold c2 = sx_index(s, sa2 + k)
+    when c1 < c2 {
+      give 0 - 1
+    }
+    when c1 > c2 {
+      give 1
+    }
+    hold k = k + 1
+  }
+  give 0
+}
+
+// Canonical configuration text in O(R log R) time.
 make ini_write(table: str) -> str {
   when ct_valid(table) == 0 {
     give "!"
   }
-  hold out = ""
-  hold secs = ini_section_count(table)
-  hold s = 0
-  while s < secs {
-    hold sec = ini_section_at(table, s)
-    when len(sec) > 0 {
-      hold open = concat(chr(91), sec)
-      hold open = concat(open, chr(93))
-      hold out = concat(out, concat(open, chr(10)))
-    }
-    hold ks = ini_key_count(table, sec)
-    hold k = 0
-    while k < ks {
-      hold key = ini_key_at(table, sec, k)
-      hold val = ini_value(table, sec, key)
-      hold out = concat(out, key)
-      hold out = concat(out, " = ")
-      hold out = concat(out, ini_quote(val))
-      hold out = concat(out, chr(10))
-      hold k = k + 1
-    }
-    hold s = s + 1
+  hold rows = ini_count(table)
+  when rows <= 0 {
+    give ""
   }
-  give out
+  hold hdr = ct_frame(table, 0)
+  hold pos = hdr[1]
+  hold cells = []
+  hold def_rows = []
+  hold sec_recs = []
+  hold r = 0
+  while r < rows {
+    hold rf = ct_frame(table, pos)
+    hold c0 = ct_frame(table, rf[0])
+    hold c1 = ct_frame(table, c0[1])
+    hold c2 = ct_frame(table, c1[1])
+    hold cells = push(cells, c0[0])
+    hold cells = push(cells, c0[1])
+    hold cells = push(cells, c1[0])
+    hold cells = push(cells, c1[1])
+    hold cells = push(cells, c2[0])
+    hold cells = push(cells, c2[1])
+    when c0[1] == c0[0] {
+      hold def_rows = push(def_rows, r)
+    } otherwise {
+      hold sh = ini_hash_span(table, c0[0], c0[1], 5381)
+      hold sec_recs = push(sec_recs, sh)
+      hold sec_recs = push(sec_recs, c0[0])
+      hold sec_recs = push(sec_recs, c0[1])
+      hold sec_recs = push(sec_recs, 0)
+      hold sec_recs = push(sec_recs, r)
+    }
+    hold pos = rf[1]
+    hold r = r + 1
+  }
+  hold out = ""
+  hold mid_buf = ""
+  hold chunk = ""
+  hold d = 0
+  while d < len(def_rows) {
+    hold dr = def_rows[d]
+    hold cb = dr * 6
+    hold key = ini_slice(table, cells[cb + 2], cells[cb + 3])
+    hold val = ini_slice(table, cells[cb + 4], cells[cb + 5])
+    hold line = concat(key, concat(" = ", concat(ini_quote(val), chr(10))))
+    hold chunk = concat(chunk, line)
+    when len(chunk) >= 1024 {
+      hold mid_buf = concat(mid_buf, chunk)
+      hold chunk = ""
+      when len(mid_buf) >= 16384 {
+        hold out = concat(out, mid_buf)
+        hold mid_buf = ""
+      }
+    }
+    hold d = d + 1
+  }
+  hold m = len(sec_recs) / 5
+  when m == 0 {
+    give concat(out, concat(mid_buf, chunk))
+  }
+  // Stable merge sort sec_recs by (hash, section_bytes), preserving row order r
+  // stored at slot +4 because <= picks left first.
+  hold cur = sec_recs
+  hold width = 1
+  while width < m {
+    hold nxt = []
+    hold left = 0
+    while left < m {
+      hold mid = left + width
+      when mid > m {
+        hold mid = m
+      }
+      hold right = mid + width
+      when right > m {
+        hold right = m
+      }
+      hold x = left
+      hold y = mid
+      while x < mid {
+        when y >= right {
+          hold nxt = ini_push_rec5(nxt, cur, x * 5)
+          hold x = x + 1
+        } otherwise {
+          when ini_sec5_cmp(table, cur, x * 5, y * 5) <= 0 {
+            hold nxt = ini_push_rec5(nxt, cur, x * 5)
+            hold x = x + 1
+          } otherwise {
+            hold nxt = ini_push_rec5(nxt, cur, y * 5)
+            hold y = y + 1
+          }
+        }
+      }
+      while y < right {
+        hold nxt = ini_push_rec5(nxt, cur, y * 5)
+        hold y = y + 1
+      }
+      hold left = right
+    }
+    hold cur = nxt
+    hold width = width * 2
+  }
+  hold pairs = []
+  hold min_r = cur[4]
+  hold pairs = push(pairs, min_r)
+  hold pairs = push(pairs, cur[4])
+  hold idx = 1
+  while idx < m {
+    when ini_sec5_cmp(table, cur, (idx - 1) * 5, idx * 5) != 0 {
+      hold min_r = cur[idx * 5 + 4]
+    }
+    hold pairs = push(pairs, min_r)
+    hold pairs = push(pairs, cur[idx * 5 + 4])
+    hold idx = idx + 1
+  }
+  hold sorted_pairs = ini_sort_pairs(pairs)
+  hold prev_grp = 0 - 1
+  hold p = 0
+  while p < m {
+    hold grp = sorted_pairs[p * 2]
+    hold row_idx = sorted_pairs[p * 2 + 1]
+    hold cb2 = row_idx * 6
+    when grp != prev_grp {
+      hold sec_name = ini_slice(table, cells[cb2], cells[cb2 + 1])
+      hold chunk = concat(chunk, concat(chr(91), concat(sec_name, concat(chr(93), chr(10)))))
+      hold prev_grp = grp
+    }
+    hold kstr = ini_slice(table, cells[cb2 + 2], cells[cb2 + 3])
+    hold vstr = ini_slice(table, cells[cb2 + 4], cells[cb2 + 5])
+    hold chunk = concat(chunk, concat(kstr, concat(" = ", concat(ini_quote(vstr), chr(10)))))
+    when len(chunk) >= 1024 {
+      hold mid_buf = concat(mid_buf, chunk)
+      hold chunk = ""
+      when len(mid_buf) >= 16384 {
+        hold out = concat(out, mid_buf)
+        hold mid_buf = ""
+      }
+    }
+    hold p = p + 1
+  }
+  give concat(out, concat(mid_buf, chunk))
 }
 
-// 1 when parsing, writing and parsing again keeps every row of the table, which
-// is what makes ini_write safe to save over a file. A reader and a writer that
-// disagree fail here rather than in a caller.
 make ini_round_trips(text: str) -> num {
   hold t = ini_parse(text)
   when string_eq(t, "!") == 1 {

@@ -115,12 +115,16 @@ make ep_ini() -> num {
   hold dir = "selfhost/seed_tests/stdlib_next"
   hold created = gl_ensure_dir(dir)
   hold half = 0
-  while half < 2 {
+  while half < 3 {
     hold stem = "selfhost/stdlib_ini"
     hold label = "INI configuration independent oracle"
     when half == 1 {
       stem = "selfhost/stdlib_ini_write"
       label = "INI writer mutation independent oracle"
+    }
+    when half == 2 {
+      stem = "selfhost/stdlib_ini_scale"
+      label = "INI 1023/1024 scale and complexity oracle"
     }
     hold src = concat(stem, "_test.sa")
     hold oracle = concat(stem, ".want")
@@ -680,6 +684,29 @@ make ep_ir() -> num {
   hold dbg_run4 = pg_capture(sh_quote(dbg_nat), concat(dir, "/debug_nat.out"))
   hold dbg_a3 = gl_assert_files_eq(concat(dir, "/debug_plain.out"), concat(dir, "/debug_nat.out"), "debuggable program == native build")
   hold dbg_a4 = gl_assert_eq_num(ep_has_line(concat(dir, "/debug_plain.out"), "9"), 0, "debuggable program printed its answer")
+  // Source-line table (`line`, `break line <n>`) + conditional breakpoint (`if DI == 2`).
+  hold dbg_w3 = bt_require_file("selfhost/debug_tests/cond_line.session.want")
+  hold dbg_cond_s = "selfhost/debug_tests/cond_line.session"
+  hold dbg_cmd5 = concat("./tools/sxirexec debug ", concat(dbg_src, concat(" ", concat(sh_quote(concat(dir, "/debug_cond")), concat(" ", dbg_cond_s)))))
+  hold dbg_run5 = pg_capture(dbg_cmd5, concat(dir, "/debug_cond.out"))
+  hold dbg_a5 = gl_assert_files_eq(concat(dir, "/debug_cond.out"), "selfhost/debug_tests/cond_line.session.want", "line-table + conditional breakpoint session")
+
+  // Cross-backend parity (seed-profile, gen2, native_aot, sxc_native, IR VM,
+  // plus native32 arm64 + riscv64 via sxisaexec) for the 4 Sayanox constructs.
+  hold nx_src = "selfhost/sayanox_next_parity_test.sa"
+  hold nx_want = "selfhost/sayanox_next_parity.want"
+  hold nx_req = bt_require_file(nx_want)
+  hold nx_k = 0
+  while nx_k < 4 {
+    hold nx_bin = concat(concat(dir, "/nx_b"), gl_istr(nx_k))
+    hold nx_c = ep_compile(nx_k, nx_src, nx_bin)
+    hold nx_r = pg_capture(sh_quote(nx_bin), concat(nx_bin, ".out"))
+    hold nx_eq = gl_assert_files_eq(nx_want, concat(nx_bin, ".out"), "sayanox_next 4-compiler parity")
+    nx_k = nx_k + 1
+  }
+  hold nx_vm = concat(dir, "/nx_vm")
+  hold nx_vm_c = pg_capture(concat("./tools/sxirexec compile-and-run ", concat(sh_quote(nx_src), concat(" ", sh_quote(nx_vm)))), concat(dir, "/nx_vm.out"))
+  hold nx_vm_eq = gl_assert_files_eq(nx_want, concat(dir, "/nx_vm.out"), "sayanox_next IR VM parity")
   give 0
 }
 

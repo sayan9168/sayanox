@@ -548,6 +548,15 @@ make skip_stmt(src: str, sn: num, from: num) -> num {
   when blk == 0 && mkw_st(src, r, "elif") == 1 {
     blk = 1
   }
+  when blk == 0 && mkw_st(src, r, "trial") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "converge") == 1 {
+    blk = 1
+  }
+  when blk == 0 && mkw_st(src, r, "invariant") == 1 {
+    give inv_cond_end(src, sn, r[0])
+  }
   when blk == 0 {
     hold e2 = eol_st(src, p)
     give p[0]
@@ -628,6 +637,196 @@ make skip_stmt(src: str, sn: num, from: num) -> num {
   }
   hold e3 = eol_st(src, p)
   give p[0]
+}
+
+make inv_cond_end(src: str, sn: num, from: num) -> num {
+  hold i = from
+  hold nest = 0
+  hold go = 1
+  while i < sn && go == 1 {
+    hold c = sx_index(src, i)
+    when c == 34 {
+      i = i + 1
+      while i < sn && sx_index(src, i) != 34 {
+        when sx_index(src, i) == 92 && i + 1 < sn {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      when i < sn {
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < sn && sx_index(src, i + 1) == 47 {
+        go = 0
+      } otherwise {
+        when nest == 0 && (c == 10 || c == 13 || c == 125 || c == 123) {
+          go = 0
+        } otherwise {
+          when c == 40 || c == 91 {
+            nest = nest + 1
+          }
+          when c == 41 || c == 93 {
+            when nest > 0 {
+              nest = nest - 1
+            }
+          }
+          when nest == 0 && id0c(c) == 1 {
+            hold prev_ok = 1
+            when i > from && idcc(sx_index(src, i - 1)) == 1 {
+              prev_ok = 0
+            }
+            when prev_ok == 1 {
+              hold we = i
+              while we < sn && idcc(sx_index(src, we)) == 1 {
+                we = we + 1
+              }
+              hold iw = sub(src, i, we)
+              when string_eq(iw, "otherwise") == 1 || string_eq(iw, "else") == 1 {
+                give i
+              }
+              i = we - 1
+            }
+          }
+          i = i + 1
+        }
+      }
+    }
+  }
+  give i
+}
+
+// Scan `CALLEE(ARGS...)` after `|>` starting at `from`. Sets `out[0]` to the
+// source position right after matching `)` and returns the normalized call text
+// (preserving explicit `_` holes or prepending `_` as first argument).
+make pipe_scan_call(src: str, sn: num, from: num, out: list) -> str {
+  hold p = from
+  hold sp = 1
+  while sp == 1 {
+    while p < sn && is_space(sx_index(src, p)) == 1 {
+      p = p + 1
+    }
+    when p + 1 < sn && sx_index(src, p) == 47 && sx_index(src, p + 1) == 47 {
+      while p < sn && sx_index(src, p) != 10 {
+        p = p + 1
+      }
+    } otherwise {
+      sp = 0
+    }
+  }
+  when p >= sn || id0c(sx_index(src, p)) == 0 {
+    hold ep0 = fail(1, "|> right-hand side must be a function call: expr |> fn(...)")
+  }
+  hold cstart = p
+  while p < sn && idcc(sx_index(src, p)) == 1 {
+    p = p + 1
+  }
+  while p < sn && (sx_index(src, p) == 32 || sx_index(src, p) == 9) {
+    p = p + 1
+  }
+  when p < sn && sx_index(src, p) == 60 {
+    hold gdepth = 1
+    p = p + 1
+    while p < sn && gdepth > 0 {
+      hold gc = sx_index(src, p)
+      when gc == 60 {
+        gdepth = gdepth + 1
+      }
+      when gc == 62 {
+        gdepth = gdepth - 1
+      }
+      p = p + 1
+    }
+    while p < sn && (sx_index(src, p) == 32 || sx_index(src, p) == 9) {
+      p = p + 1
+    }
+  }
+  when p >= sn || sx_index(src, p) != 40 {
+    hold ep1 = fail(1, "|> right-hand side must be a function call: expr |> fn(...)")
+  }
+  hold lparen = p
+  hold i = lparen + 1
+  hold depth = 0
+  hold has_hole = 0
+  hold done = 0
+  while i < sn && done == 0 {
+    hold c = sx_index(src, i)
+    when c == 34 {
+      i = i + 1
+      while i < sn && sx_index(src, i) != 34 {
+        when sx_index(src, i) == 92 && i + 1 < sn {
+          i = i + 1
+        }
+        i = i + 1
+      }
+      when i < sn {
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < sn && sx_index(src, i + 1) == 47 {
+        while i < sn && sx_index(src, i) != 10 {
+          i = i + 1
+        }
+      } otherwise {
+        when c == 40 || c == 91 || c == 123 {
+          depth = depth + 1
+          i = i + 1
+        } otherwise {
+          when c == 41 {
+            when depth == 0 {
+              done = 1
+            } otherwise {
+              depth = depth - 1
+              i = i + 1
+            }
+          } otherwise {
+            when c == 93 || c == 125 {
+              when depth > 0 {
+                depth = depth - 1
+              }
+              i = i + 1
+            } otherwise {
+              when depth == 0 && c == 95 {
+                hold prev_id = 0
+                when i > lparen + 1 && idcc(sx_index(src, i - 1)) == 1 {
+                  prev_id = 1
+                }
+                hold next_id = 0
+                when i + 1 < sn && idcc(sx_index(src, i + 1)) == 1 {
+                  next_id = 1
+                }
+                when prev_id == 0 && next_id == 0 {
+                  has_hole = 1
+                }
+              }
+              i = i + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  when done == 0 {
+    hold ep2 = fail(1, "unterminated call after |>")
+  }
+  hold rparen = i
+  out[0] = rparen + 1
+  when has_hole == 1 {
+    give sub(src, cstart, rparen + 1)
+  }
+  hold head = sub(src, cstart, lparen)
+  hold as0 = lparen + 1
+  hold ae0 = rparen
+  while as0 < ae0 && is_space(sx_index(src, as0)) == 1 {
+    as0 = as0 + 1
+  }
+  while ae0 > as0 && is_space(sx_index(src, ae0 - 1)) == 1 {
+    ae0 = ae0 - 1
+  }
+  when as0 >= ae0 {
+    give concat(head, "(_)")
+  }
+  give concat(head, concat("(_, ", concat(sub(src, as0, ae0), ")")))
 }
 
 // ---- phase 1: collect_defs into `st` + `pool` -----------------------------
@@ -2450,6 +2649,14 @@ make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
       give 3
     }
     when at(src, sn, qpos) == 40 {
+      hold old_pipe_pk = st[40]
+      when old_pipe_pk == 2 {
+        st[40] = 1
+      } otherwise {
+        when old_pipe_pk == 1 {
+          st[40] = 0
+        }
+      }
       hold bar = builtin_arity_st(st, n)
       when bar >= 0 {
         st[0] = qpos + 1
@@ -2483,6 +2690,7 @@ make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
           mb = concat(mb, numstr(nargs))
           hold e19 = fail(1, mb)
         }
+        st[40] = old_pipe_pk
         hold bret = builtin_ret_st(st, n)
         st[3] = bret
         st[4] = 0 - 1
@@ -2571,6 +2779,7 @@ make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
             }
           }
         }
+        st[40] = old_pipe_pk
         when is_gen == 1 {
           ufi = pick_instance(st, pool, ufi, ukinds, unargs)
           fb = f_base(ufi)
@@ -2592,6 +2801,17 @@ make pk_prim(src: str, st: list, pool: list, depth: num) -> num {
         }
         give urk
       }
+      st[40] = old_pipe_pk
+    }
+    when string_eq(n, "_") == 1 && st[40] == 1 {
+      hold ph_k = st[42]
+      st[3] = ph_k
+      when ph_k == 3 {
+        st[4] = st[43]
+      } otherwise {
+        st[4] = 0 - 1
+      }
+      give ph_k
     }
     when string_eq(n, "and") == 1 || string_eq(n, "or") == 1 || string_eq(n, "not") == 1 {
       hold mw = concat("'", n)
@@ -2826,8 +3046,50 @@ make pk_rel(src: str, st: list, pool: list, depth: num) -> num {
   give k
 }
 
-make pk_full(src: str, st: list, pool: list, depth: num) -> num {
+make pk_pipe(src: str, st: list, pool: list, depth: num) -> num {
   hold k = pk_rel(src, st, pool, depth)
+  hold cur_sid = st[4]
+  hold sn = st[1]
+  hold go = 1
+  while go == 1 {
+    hold z = sw_st(src, st)
+    when at(src, sn, st[0]) == 124 && at(src, sn, st[0] + 1) == 62 {
+      st[0] = st[0] + 2
+      hold sp_out = [0]
+      hold call_txt = pipe_scan_call(src, sn, st[0], sp_out)
+      hold after_call = sp_out[0]
+      hold old_p0 = st[0]
+      hold old_sn = st[1]
+      hold old40 = st[40]
+      hold old42 = st[42]
+      hold old43 = st[43]
+      st[0] = 0
+      st[1] = len(call_txt)
+      st[40] = 2
+      st[42] = k
+      st[43] = cur_sid
+      k = pk_prim(call_txt, st, pool, depth + 1)
+      cur_sid = st[4]
+      st[40] = old40
+      st[42] = old42
+      st[43] = old43
+      st[1] = old_sn
+      st[0] = after_call
+    } otherwise {
+      go = 0
+    }
+  }
+  st[3] = k
+  when k == 3 {
+    st[4] = cur_sid
+  } otherwise {
+    st[4] = 0 - 1
+  }
+  give k
+}
+
+make pk_full(src: str, st: list, pool: list, depth: num) -> num {
+  hold k = pk_pipe(src, st, pool, depth)
   hold saved_sid = st[4]
   hold z = sw_st(src, st)
   hold sn = st[1]
@@ -2843,7 +3105,7 @@ make pk_full(src: str, st: list, pool: list, depth: num) -> num {
   }
   when oplen > 0 {
     st[0] = st[0] + oplen
-    hold k2 = pk_rel(src, st, pool, depth)
+    hold k2 = pk_pipe(src, st, pool, depth)
     when k == 1 && k2 != 1 {
       hold e1 = fail(1, "string compared with a non-string")
     }

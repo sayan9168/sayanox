@@ -778,6 +778,9 @@ make known_word(w: str) -> num {
   when string_eq(w, "break") || string_eq(w, "continue") {
     ok = 1
   }
+  when string_eq(w, "trial") || string_eq(w, "rewind") || string_eq(w, "converge") || string_eq(w, "within") || string_eq(w, "invariant") {
+    ok = 1
+  }
   when string_eq(w, "make") || string_eq(w, "struct") || string_eq(w, "use") || string_eq(w, "module") {
     ok = 1
   }
@@ -861,6 +864,21 @@ make doc_for(w: str) -> str {
   }
   when string_eq(w, "while") {
     d = "`while COND { ... }` loops while COND is non-zero."
+  }
+  when string_eq(w, "trial") {
+    d = "`trial { ... } [otherwise { ... }]` snapshots mutated outer `num`/`str` bindings and restores them atomically on `rewind`."
+  }
+  when string_eq(w, "rewind") {
+    d = "`rewind` aborts the enclosing `trial` block, restoring outer `num`/`str` bindings and running any `otherwise` handler."
+  }
+  when string_eq(w, "converge") {
+    d = "`converge VAR within BOUND { ... } [otherwise { ... }]` iterates until `VAR` reaches a fixed point or `BOUND` steps elapse."
+  }
+  when string_eq(w, "within") {
+    d = "`within BOUND` sets the maximum iteration budget of a `converge VAR within BOUND { ... }` loop."
+  }
+  when string_eq(w, "invariant") {
+    d = "`invariant COND [otherwise { ... }]` enforces `COND`, optionally running `otherwise` to repair state and re-verify."
   }
   when string_eq(w, "for") {
     d = "`for i in 0..10 { ... }` counts; `for v in xs { ... }` walks a list."
@@ -1153,6 +1171,12 @@ make diagnostics(text: str, dir: str) -> str {
             msg = concat("unknown statement '", w)
             msg = concat(msg, "'")
             items = items + diag_item(l, utf16_span(line, a), 1, "SX1001", msg, count)
+            count += 1
+          }
+        }
+        when string_eq(w, "rewind") {
+          when find(text, "trial") < 0 {
+            items = items + diag_item(l, utf16_span(line, a), 1, "SX1006", "rewind outside a trial block", count)
             count += 1
           }
         }
@@ -2065,20 +2089,157 @@ make format_edit(text: str) -> str {
   give b
 }
 
-// code_actions: the one action this server can truthfully offer -- format
-// the document -- and only when formatting would change it. The edit is the
-// same whole-buffer edit textDocument/formatting answers.
-make code_actions(text: str, uri: str) -> str {
-  hold fe = format_edit(text)
-  hold b = "[]"
-  when string_eq(fe, "[]") == 0 {
-    hold b = "[{\"title\":\"Format this Sayanox document\",\"kind\":\"source.formatDocument\",\"edit\":{\"changes\":{\""
-    hold b = concat(b, json_esc(uri))
-    hold b = concat(b, "\":")
-    hold b = concat(b, fe)
-    hold b = concat(b, "}}}]")
+make qfix_action(title: str, uri: str, sl: num, sc: num, el: num, ec: num, newtxt: str, first: num) -> str {
+  hold b = ""
+  when first > 0 {
+    b = ","
   }
+  b = concat(b, "{\"title\":\"")
+  b = concat(b, json_esc(title))
+  b = concat(b, "\",\"kind\":\"quickfix\",\"edit\":{\"changes\":{\"")
+  b = concat(b, json_esc(uri))
+  b = concat(b, "\":[{\"range\":{\"start\":{\"line\":")
+  b = concat(b, numstr(sl))
+  b = concat(b, ",\"character\":")
+  b = concat(b, numstr(sc))
+  b = concat(b, "},\"end\":{\"line\":")
+  b = concat(b, numstr(el))
+  b = concat(b, ",\"character\":")
+  b = concat(b, numstr(ec))
+  b = concat(b, "}},\"newText\":\"")
+  b = concat(b, json_esc(newtxt))
+  b = concat(b, "\"}]}}}")
   give b
+}
+
+make line_unclosed_str_parens(line: str) -> list {
+  hold n = len(line)
+  hold i = 0
+  hold in_s = 0
+  hold pd = 0
+  while i < n {
+    hold c = sx_index(line, i)
+    when in_s == 1 {
+      when c == 92 && i + 1 < n {
+        i = i + 2
+      } otherwise {
+        when c == 34 {
+          in_s = 0
+        }
+        i = i + 1
+      }
+    } otherwise {
+      when c == 47 && i + 1 < n && sx_index(line, i + 1) == 47 {
+        i = n
+      } otherwise {
+        when c == 34 {
+          in_s = 1
+        }
+        when c == 40 {
+          pd = pd + 1
+        }
+        when c == 41 {
+          pd = pd - 1
+        }
+        i = i + 1
+      }
+    }
+  }
+  give [in_s, pd]
+}
+
+make doc_brace_balance(text: str) -> num {
+  hold n = len(text)
+  hold i = 0
+  hold in_s = 0
+  hold in_c = 0
+  hold bd = 0
+  while i < n {
+    hold c = sx_index(text, i)
+    when c == 10 {
+      in_s = 0
+      in_c = 0
+      i = i + 1
+    } otherwise {
+      when in_c == 1 {
+        i = i + 1
+      } otherwise {
+        when in_s == 1 {
+          when c == 92 && i + 1 < n {
+            i = i + 2
+          } otherwise {
+            when c == 34 {
+              in_s = 0
+            }
+            i = i + 1
+          }
+        } otherwise {
+          when c == 47 && i + 1 < n && sx_index(text, i + 1) == 47 {
+            in_c = 1
+            i = i + 2
+          } otherwise {
+            when c == 34 {
+              in_s = 1
+            }
+            when c == 123 {
+              bd = bd + 1
+            }
+            when c == 125 {
+              bd = bd - 1
+            }
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  give bd
+}
+
+// code_actions: offers whole-document formatting when formatting would change
+// the buffer, plus diagnostic-scoped quick fixes for SX1002 (unterminated
+// string), SX1003 (missing closing brace), SX1004 (unclosed parenthesis), and
+// SX1006 (bare `rewind` outside `trial`). Clean formatted buffers answer `[]`.
+make code_actions(text: str, uri: str, req_ln: num) -> str {
+  hold items = ""
+  hold fe = format_edit(text)
+  when string_eq(fe, "[]") == 0 {
+    items = concat(items, "{\"title\":\"Format this Sayanox document\",\"kind\":\"source.formatDocument\",\"edit\":{\"changes\":{\"")
+    items = concat(items, json_esc(uri))
+    items = concat(items, "\":")
+    items = concat(items, fe)
+    items = concat(items, "}}}")
+  }
+  hold nlines = count_lines(text)
+  when req_ln >= 0 && req_ln < nlines {
+    hold lt = line_text(text, req_ln)
+    hold sp_end = utf16_span(lt, len(lt))
+    hold end_c = sp_end[0]
+    hold sp_info = line_unclosed_str_parens(lt)
+    when sp_info[0] == 1 {
+      items = concat(items, qfix_action("Close unterminated string literal", uri, req_ln, end_c, req_ln, end_c, "\"", len(items)))
+    }
+    when sp_info[1] > 0 {
+      items = concat(items, qfix_action("Close unbalanced parenthesis", uri, req_ln, end_c, req_ln, end_c, ")", len(items)))
+    }
+    hold tlt = trim_str(strip_line_comment(lt))
+    when string_eq(tlt, "rewind") == 1 && find(text, "trial") < 0 {
+      items = concat(items, qfix_action("Wrap rewind in trial block", uri, req_ln, 0, req_ln, end_c, "trial {\n  rewind\n}", len(items)))
+    }
+  }
+  hold bbal = doc_brace_balance(text)
+  when bbal > 0 {
+    hold eln = nlines
+    hold ech = 0
+    when len(text) > 0 && sx_index(text, len(text) - 1) != 10 {
+      eln = nlines - 1
+      hold llast = line_text(text, eln)
+      hold lspan = utf16_span(llast, len(llast))
+      ech = lspan[0]
+    }
+    items = concat(items, qfix_action("Append missing closing brace", uri, eln, ech, eln, ech, "}\n", len(items)))
+  }
+  give concat("[", concat(items, "]"))
 }
 
 // ------------------------------------------------------------- completion
@@ -2154,7 +2315,7 @@ make completion_scan(text: str, prefix: str, detail: str, arr: str) -> str {
 // legacy clients; user symbols from the current buffer, textual imports and
 // namespaced module members are added with LSP symbol kinds.
 make completion_items(doc: str, docuri: str, ln: num, ch: num, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
-  hold words = "hold show when otherwise else elif while for break continue make give struct use true false and or not push concat len chr sx_index string_eq read_file write_file arg arg_count read_line read_n write_out flush_out numstr gc gc_live gc_runs"
+  hold words = "hold show when otherwise else elif while converge within trial rewind invariant for break continue make give struct use true false and or not push concat len chr sx_index string_eq read_file write_file arg arg_count read_line read_n write_out flush_out numstr gc gc_live gc_runs"
   hold arr = ""
   hold n = len(words)
   hold i = 0
@@ -5178,7 +5339,7 @@ while running == 1 {
         d = reply(idraw, sig_help_ws(w, doc, docuri, ln, ch, workspace_index, uri0, txt0, uri1, txt1, uri2, txt2, uri3, txt3))
       }
       when string_eq(method, "textDocument/codeAction") {
-        d = reply(idraw, code_actions(doc, docuri))
+        d = reply(idraw, code_actions(doc, docuri, ln))
       }
       when string_eq(method, "exit") {
         running = 0

@@ -1278,7 +1278,38 @@ hold deep_sa = concat(dir, "/isa_deep.sa")
 hold wd = write_deep_fixture(deep_sa)
 hold v4 = verify_six_way(dir, "isa_deep", deep_sa, "", "")
 
+make verify_sayanox_next_isas(dir: str) -> num {
+  hold source = "selfhost/sayanox_next_parity_test.sa"
+  hold want = "selfhost/sayanox_next_parity.want"
+  hold can_i386 = run_command(concat(sh_q(concat(dir, "/literal-probe.elf")), " >/dev/null 2>&1"))
+  hold i = 0
+  while i < 3 {
+    hold arch = "i386"
+    when i == 1 { arch = "arm64" }
+    when i == 2 { arch = "riscv64" }
+    hold elf = concat(dir, concat("/sayanox_next-", concat(arch, ".elf")))
+    hold out = concat(elf, ".out")
+    when run_command(concat("./tools/native32 ", concat(sh_q(source), concat(" ", concat(sh_q(elf), concat(" ", arch)))))) != 0 {
+      hold f1 = fail_t(concat("sayanox_next native32 compile: ", arch))
+    }
+    hold cmd = concat("./tools/sxisaexec --arch ", concat(arch, concat(" --out ", concat(sh_q(out), concat(" ", sh_q(elf))))))
+    when i == 0 {
+      cmd = concat("chmod +x ", concat(sh_q(elf), concat(" && ", concat(sh_q(elf), concat(" > ", sh_q(out))))))
+    }
+    when i > 0 || can_i386 == 0 {
+      when run_command(cmd) != 0 {
+        hold f2 = fail_t(concat("sayanox_next execution: ", arch))
+      }
+      hold eq = assert_files_eq(want, out, concat("sayanox_next multi-ISA oracle: ", arch))
+    }
+    i = i + 1
+  }
+  show "[ok] sayanox_next 4-construct parity verified across i386, arm64, and riscv64"
+  give 0
+}
+
 hold vn = test_negative_faults(dir)
 hold vf = test_file_syscalls(dir)
 hold vfp = test_fp_arithmetic(dir)
+hold vsxnext = verify_sayanox_next_isas(dir)
 show "SXISAEXEC-PARITY-OK"

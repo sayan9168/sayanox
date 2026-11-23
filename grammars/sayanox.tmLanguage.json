@@ -85,14 +85,14 @@
     "keyword-control": {
       "patterns": [
         {
-          "comment": "when / otherwise, with the else alias and the elif chain forms.",
+          "comment": "when / otherwise, with the else alias, elif chain forms, trial / rewind transactions, and invariant contracts.",
           "name": "keyword.control.conditional.sayanox",
-          "match": "\\b(when|otherwise|else|elif)\\b"
+          "match": "\\b(when|otherwise|else|elif|trial|rewind|invariant)\\b"
         },
         {
-          "comment": "while is the portable loop; for NAME in EXPR, break and continue are gen2 full-language forms.",
+          "comment": "while and converge ... within are portable loops; for NAME in EXPR, break and continue are loop control forms.",
           "name": "keyword.control.loop.sayanox",
-          "match": "\\b(while|for|in|break|continue)\\b"
+          "match": "\\b(while|converge|within|for|in|break|continue)\\b"
         },
         {
           "name": "keyword.control.return.sayanox",
@@ -215,6 +215,11 @@
           "comment": "The declared return arrow; matched before the arithmetic minus.",
           "name": "storage.type.function.arrow.sayanox",
           "match": "->"
+        },
+        {
+          "comment": "Left-associative value pipeline operator; matched before comparison >.",
+          "name": "keyword.operator.pipe.sayanox",
+          "match": "\\|>"
         },
         {
           "name": "keyword.operator.range.sayanox",
