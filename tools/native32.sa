@@ -1418,6 +1418,15 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str, sour
   when nargs != fn_arity[fi] {
     hold badarity = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": '", nm)), concat(concat("' takes ", numstr(fn_arity[fi])), concat(concat(" numeric arguments, not ", numstr(nargs)), ""))))
   }
+  when fn_builtin[fi] == 1 {
+    hold p0 = arg_token_text(toks, source, afrom[0], aupto[0])
+    hold p1 = ""
+    when nargs > 1 {
+      p1 = arg_token_text(toks, source, afrom[1], aupto[1])
+    }
+    hold ion = emit_io_call(fi, p0, p1)
+    give 0
+  }
   hold ptypes = nth_field(fn_ptypetbl, fi)
   hold a = 0
   hold pushed = 0
@@ -1633,6 +1642,7 @@ make lift_functions() -> str {
       fn_arity = push(fn_arity, arity)
       fn_line = push(fn_line, lineno + 1)
       fn_off = push(fn_off, 0)
+      fn_builtin = push(fn_builtin, 0)
       fn_names = concat(fn_names, concat(concat(concat("|", fname), "="), numstr(fn_count)))
       fn_names = concat(fn_names, "|")
       fn_count = fn_count + 1
@@ -6883,6 +6893,522 @@ make n32_lower(text: str) -> str {
   give n32_block(text, 0, len(text), ctr, "", 0)
 }
 
+// ---- file I/O: write_file / read_file on i386, AArch64 and RV64IM ----------
+// The published backends reach these two builtins through the C runtime; native32
+// has no runtime, so it lowers them into the target's own Linux syscall ABI.
+// Each image gets one shared routine per builtin, placed after the `make` bodies
+// and reached by `call`, exactly like the shared `string_eq` routine. The routine
+// takes its arguments and leaves its result in a block of data-segment words
+// allocated on first use, so no call site needs a frame, the value stack is never
+// touched (a call is just another accumulator write), and one routine serves
+// every call in the program. Addresses inside the block are baked into *code*
+// immediates, never stored into the data image, so a program's data segment stays
+// arch-neutral (R14) and the block's initial bytes are zeros and pooled text.
+//   io block, offsets from io_st[0]:
+//     +0     path pointer (NUL-terminated pooled text)
+//     +4     path length (copied with the same pair store; no syscall needs it)
+//     +8     text pointer          +12  text length
+//     +16    the descriptor the open returned
+//     +20    the count the write or read reported
+//     +28    what the close reported
+//     +32    the 4096-byte read buffer; +4128 is one newline byte, so a shown
+//            empty or full result can take show's extra byte without leaving it
+// io_st: [0] block base, [1] write used, [2] read used, [3] write entry,
+// [4] read entry, [5] skip-jump site, [6] skip needs its target, and from [7]
+// one (patch site, 1 for the read routine) pair per call site.
+hold io_st = [0, 0, 0, 0, 0, 0, 0]
+// 1 for a table entry that names a file builtin rather than a `make` body. The
+// two builtins ride in the function tables so the existing arity, `str`/`num`
+// typing and `-> str` result plumbing applies to them unchanged; everything the
+// frame, the recursion counter and the overflow stub are allocated for counts
+// only the real bodies, which is what fn_user_count answers.
+hold fn_builtin = []
+
+// Does `text` contain `pat`? A byte scan: the builtins have to be recognised from
+// the program text, because a program that never names them must not pay for the
+// block or the routine.
+make io_has(text: str, pat: str) -> num {
+  hold n = len(text)
+  hold m = len(pat)
+  hold i = 0
+  while i + m <= n {
+    hold j = 0
+    while j < m && sx_index(text, i + j) == sx_index(pat, j) { j = j + 1 }
+    when j == m { give 1 }
+    i = i + 1
+  }
+  give 0
+}
+
+// How many table entries are real `make` bodies.
+make fn_user_count() -> num {
+  hold i = 0
+  hold c = 0
+  while i < fn_count {
+    when fn_builtin[i] == 0 { c = c + 1 }
+    i = i + 1
+  }
+  give c
+}
+
+// Declare a file builtin as a function-table entry, with `str` parameters, so a
+// call reaches it through the same path as a user function. A program that
+// declares a `make` of that name keeps its own function: the builtin is not
+// added, and the call then resolves to the body as usual.
+make io_declare(nm: str, arity: num, retstr: num) -> num {
+  when slot_of(fn_names, nm) >= 0 { give 0 }
+  hold parms = "|p=0|"
+  hold ptypes = "|p=1|"
+  when arity > 1 {
+    parms = "|p=0|q=0|"
+    ptypes = "|p=1|q=1|"
+  }
+  fn_frame_words = push(fn_frame_words, 0)
+  fn_nametbl = concat(fn_nametbl, concat(nm, "\n"))
+  fn_paramtbl = concat(fn_paramtbl, concat(parms, "\n"))
+  fn_ptypetbl = concat(fn_ptypetbl, concat(ptypes, "\n"))
+  fn_bodytbl = concat(fn_bodytbl, chr(1))
+  fn_retstr = push(fn_retstr, retstr)
+  when retstr == 1 && fn_retpair < 0 {
+    fn_retpair = len(data)
+    data = put_zeros(data, 8)
+  }
+  fn_arity = push(fn_arity, arity)
+  fn_line = push(fn_line, 1)
+  fn_off = push(fn_off, 0)
+  fn_builtin = push(fn_builtin, 1)
+  fn_names = concat(fn_names, concat(concat(concat("|", nm), "="), numstr(fn_count)))
+  fn_names = concat(fn_names, "|")
+  fn_count = fn_count + 1
+  give 0
+}
+
+// Register whichever file builtins this program names, after the `make` bodies
+// have been lifted so the real functions keep the leading table indices.
+make io_scan() -> num {
+  hold prog = concat(src, fn_bodytbl)
+  when io_has(prog, "write_file(") == 1 {
+    hold dw = io_declare("write_file", 2, 0)
+  }
+  when io_has(prog, "read_file(") == 1 {
+    hold dr = io_declare("read_file", 1, 1)
+  }
+  give 0
+}
+
+// Take the io block, once, on the first call site.
+make io_reserve() -> num {
+  when io_st[0] == 0 {
+    io_st[0] = len(data)
+    data = put_zeros(data, 4129)
+    data[len(data) - 1] = 10
+  }
+  give 0
+}
+
+// The absolute data address of the io field at block offset `o`.
+make io_abs(o: num) -> num {
+  give dva_of(io_st[0] + o)
+}
+
+// acc = the data word at the absolute address `a`. Loads only touch the
+// accumulator and the addressing temp, so any register can hold loop state.
+make io_ld(xs: list, ah: num, a: num) -> list {
+  give emit_load_abs_word(xs, ah, a)
+}
+
+// The data word at the absolute address `a` = acc; the accumulator survives.
+// A 32-bit store, so the neighbouring block word is left alone.
+make io_st_acc(xs: list, ah: num, a: num) -> list {
+  when ah == 0 {
+    xs = e1(xs, 163)
+    give e32(xs, a)
+  }
+  when ah == 2 {
+    xs = rv_li32(xs, 5, a)
+    give e_w(xs, rv_s(0, 10, 5, 2))
+  }
+  xs = a_abs(xs, 9, a)
+  give e_w(xs, 3103785248)
+}
+
+// acc = an immediate. i386 and RV64IM get the wide forms they already use;
+// AArch64 needs a movz/movk pair, and a 32-bit write zeroes the upper half, which
+// is exactly what a pointer or a length below 4 GiB wants.
+make io_imm(xs: list, ah: num, v: num) -> list {
+  when ah == 0 {
+    xs = e1(xs, 184)
+    give e32(xs, v)
+  }
+  when ah == 2 {
+    give rv_li32(xs, 10, v)
+  }
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs = a_movz(xs, 0, 0, bit_and(u, 65535))
+  give a_movk16(xs, 0, 0, bit_and(shr(u, 16), 65535))
+}
+
+// Syscall argument `k` (0..3) = an immediate. i386's int 0x80 arguments start at
+// ebx and the number is in eax; AArch64 uses x0..x3 with x8 for the number and
+// x0 for the result; RV64IM uses a0..a3 with a7 for the number and a0 for both.
+make io_arg_imm(xs: list, ah: num, k: num, v: num) -> list {
+  when ah == 0 {
+    hold dst = 3
+    when k == 1 { dst = 1 }
+    when k == 2 { dst = 2 }
+    when k == 3 { dst = 6 }
+    xs = e1(xs, 184 + dst)
+    give e32(xs, v)
+  }
+  when ah == 2 {
+    give rv_li32(xs, 10 + k, v)
+  }
+  hold u = v
+  when u < 0 {
+    u = u + 4294967296
+  }
+  xs = a_movz(xs, 0, k, bit_and(u, 65535))
+  give a_movk16(xs, 0, k, bit_and(shr(u, 16), 65535))
+}
+
+// Syscall argument `k` (0..3) = acc. The accumulator is already the right
+// register for AArch64 and RV64IM, so those move nothing when k is 0.
+make io_arg_acc(xs: list, ah: num, k: num) -> list {
+  when ah == 0 {
+    hold dst = 3
+    when k == 1 { dst = 1 }
+    when k == 2 { dst = 2 }
+    when k == 3 { dst = 6 }
+    xs = e1(xs, 139)
+    give e1(xs, 192 + dst * 8)
+  }
+  when ah == 2 {
+    when k == 0 { give xs }
+    give e_w(xs, rv_i(0, 10, 0, 10 + k, 19))
+  }
+  when k == 0 { give xs }
+  give e_w(xs, 2852127712 + k)
+}
+
+// The target's own number for a generic Linux system call. AArch64 and RV64IM
+// use the generic table; i386's int 0x80 table predates it.
+make io_nr(n: num) -> num {
+  when n == 56 { give 295 }
+  when n == 57 { give 6 }
+  when n == 63 { give 3 }
+  when n == 64 { give 4 }
+  give n
+}
+
+// The system-call number, then the trap.
+make io_syscall(xs: list, ah: num, n: num) -> list {
+  when ah == 0 {
+    xs = e1(xs, 184)
+    xs = e32(xs, io_nr(n))
+    xs = e1(xs, 205)
+    give e1(xs, 128)
+  }
+  when ah == 2 {
+    xs = e_w(xs, rv_i(n, 0, 0, 17, 19))
+    give e_w(xs, 115)
+  }
+  xs = a_movz(xs, 1, 8, n)
+  give e_w(xs, 3556769793)
+}
+
+// A 2-byte i386 short jump or conditional: the displacement is relative to the
+// end of the instruction and has to fit the signed byte, which the emitted
+// sequences do by construction -- the check keeps that honest.
+make patch_rel8(xs: list, at: num, delta: num) -> list {
+  when delta < 0 - 128 || delta > 127 {
+    hold far8 = fail(1, "an emitted i386 short jump does not fit its 8-bit displacement")
+  }
+  hold u = delta
+  when u < 0 {
+    u = u + 256
+  }
+  xs[at + 1] = bit_and(u, 255)
+  give xs
+}
+
+// write_file: openat(AT_FDCWD, path, O_WRONLY|O_CREAT|O_TRUNC, 0644), write the
+// text span, close, and answer 1 exactly when the write reported the whole span.
+// A failed open needs no separate test: its negative count is not the length, and
+// for an empty span it is -EBADF rather than 0.
+make emit_io_write_routine(xs: list, ah: num) -> list {
+  // Arguments go out in reverse order. AArch64 and RV64IM take their first
+  // argument in the accumulator, which every later load would overwrite, and
+  // i386 takes its arguments in registers the accumulator never touches -- so
+  // one order serves all three.
+  xs = io_ld(xs, ah, io_abs(0))
+  xs = io_arg_acc(xs, ah, 1)
+  xs = io_arg_imm(xs, ah, 2, 577)
+  xs = io_arg_imm(xs, ah, 3, 420)
+  xs = io_arg_imm(xs, ah, 0, 0 - 100)
+  xs = io_syscall(xs, ah, 56)
+  xs = io_st_acc(xs, ah, io_abs(16))
+  xs = io_ld(xs, ah, io_abs(8))
+  xs = io_arg_acc(xs, ah, 1)
+  xs = io_ld(xs, ah, io_abs(12))
+  xs = io_arg_acc(xs, ah, 2)
+  xs = io_ld(xs, ah, io_abs(16))
+  xs = io_arg_acc(xs, ah, 0)
+  xs = io_syscall(xs, ah, 64)
+  xs = io_st_acc(xs, ah, io_abs(20))
+  xs = io_ld(xs, ah, io_abs(16))
+  xs = io_arg_acc(xs, ah, 0)
+  xs = io_syscall(xs, ah, 57)
+  xs = io_st_acc(xs, ah, io_abs(28))
+  // Both checks read back out of the block after the close, because a register
+  // would not survive the trap. The write has to report the whole span and the
+  // close has to report no error: on i386 a path that cannot be created fails at
+  // the open, where the count is already wrong, and an emulator whose open is
+  // forgiving still fails at the close.
+  // The result is 1 in the accumulator either way.
+  when ah == 0 {
+    // mov ecx,[len] ; cmp ecx,[got] ; sete al ; movzx eax,al
+    // mov ecx,[close] ; test ecx,ecx ; sete cl ; movzx ecx,cl ; and eax,ecx
+    xs = e1(xs, 139)
+    xs = e1(xs, 13)
+    xs = e32(xs, io_abs(12))
+    xs = e1(xs, 59)
+    xs = e1(xs, 13)
+    xs = e32(xs, io_abs(20))
+    xs = e1(xs, 15)
+    xs = e1(xs, 148)
+    xs = e1(xs, 192)
+    xs = e1(xs, 15)
+    xs = e1(xs, 182)
+    xs = e1(xs, 192)
+    xs = e1(xs, 139)
+    xs = e1(xs, 13)
+    xs = e32(xs, io_abs(28))
+    xs = e1(xs, 133)
+    xs = e1(xs, 201)
+    xs = e1(xs, 15)
+    xs = e1(xs, 148)
+    xs = e1(xs, 193)
+    xs = e1(xs, 15)
+    xs = e1(xs, 182)
+    xs = e1(xs, 201)
+    xs = e1(xs, 33)
+    xs = e1(xs, 200)
+  } otherwise {
+    when ah == 2 {
+      // lw a0,[got] ; mv a1,a0 ; lw a0,[len] ; sub a0,a0,a1 ; seqz a0,a0 ;
+      // mv a2,a0 ; lw a0,[close] ; seqz a0,a0 ; mv a3,a0 ; and a0,a2,a3
+      xs = io_ld(xs, ah, io_abs(20))
+      xs = e_w(xs, rv_i(0, 10, 0, 11, 19))
+      xs = io_ld(xs, ah, io_abs(12))
+      xs = e_w(xs, rv_r(32, 11, 10, 0, 10, 51))
+      xs = e_w(xs, rv_i(1, 10, 3, 10, 19))
+      xs = e_w(xs, rv_i(0, 10, 0, 12, 19))
+      xs = io_ld(xs, ah, io_abs(28))
+      xs = e_w(xs, rv_i(1, 10, 3, 10, 19))
+      xs = e_w(xs, rv_i(0, 10, 0, 13, 19))
+      xs = e_w(xs, rv_r(0, 13, 12, 7, 10, 51))
+    } otherwise {
+      // ldr w0,[got] ; mov w11,w0 ; ldr w0,[len] ; cmp w0,w11 ; cset w12,eq ;
+      // ldr w0,[close] ; cmp w0,#0 ; cset w13,eq ; and w0,w12,w13
+      xs = io_ld(xs, ah, io_abs(20))
+      xs = e_w(xs, 704644075)
+      xs = io_ld(xs, ah, io_abs(12))
+      xs = e_w(xs, 1795883039)
+      xs = e_w(xs, 446633964)
+      xs = io_ld(xs, ah, io_abs(28))
+      xs = e_w(xs, 1895825439)
+      xs = e_w(xs, 446633965)
+      xs = e_w(xs, 168624512)
+    }
+  }
+  give emit_ret(xs, ah)
+}
+
+// read_file: open, one bounded read into the block's buffer, close, then walk the
+// bytes the read reported and stop at the first NUL, because a string value is a
+// C string on the published backends -- sx_read returns the whole file and every
+// consumer then reads it as text, so the span ends at the first NUL there too.
+// The walk also leaves a newline after the span, which is what a `show` of the
+// result writes as its extra byte. A negative count (a failed open) stops the
+// walk at once, so an unreadable path gives the empty string, exactly as the
+// published backends do.
+make emit_io_read_routine(xs: list, ah: num) -> list {
+  xs = io_ld(xs, ah, io_abs(0))
+  xs = io_arg_acc(xs, ah, 1)
+  xs = io_arg_imm(xs, ah, 2, 0)
+  xs = io_arg_imm(xs, ah, 3, 0)
+  xs = io_arg_imm(xs, ah, 0, 0 - 100)
+  xs = io_syscall(xs, ah, 56)
+  xs = io_st_acc(xs, ah, io_abs(16))
+  xs = io_arg_imm(xs, ah, 1, io_abs(32))
+  xs = io_arg_imm(xs, ah, 2, 4096)
+  xs = io_ld(xs, ah, io_abs(16))
+  xs = io_arg_acc(xs, ah, 0)
+  xs = io_syscall(xs, ah, 63)
+  xs = io_st_acc(xs, ah, io_abs(20))
+  xs = io_ld(xs, ah, io_abs(16))
+  xs = io_arg_acc(xs, ah, 0)
+  xs = io_syscall(xs, ah, 57)
+  when ah == 0 {
+    // lea esi,[buf] ; xor ecx,ecx ; mov edx,[got]
+    xs = e1(xs, 141)
+    xs = e1(xs, 53)
+    xs = e32(xs, io_abs(32))
+    xs = e1(xs, 49)
+    xs = e1(xs, 201)
+    xs = e1(xs, 139)
+    xs = e1(xs, 21)
+    xs = e32(xs, io_abs(20))
+    hold rl = len(xs)
+    // cmp ecx,edx ; jge end ; movzx eax,byte[esi] ; test eax,eax ; jz end
+    xs = e1(xs, 59)
+    xs = e1(xs, 202)
+    hold rge = len(xs)
+    xs = e1(xs, 125)
+    xs = e1(xs, 0)
+    xs = e1(xs, 15)
+    xs = e1(xs, 182)
+    xs = e1(xs, 6)
+    xs = e1(xs, 133)
+    xs = e1(xs, 192)
+    hold rje = len(xs)
+    xs = e1(xs, 116)
+    xs = e1(xs, 0)
+    // inc esi ; inc ecx ; jmp loop
+    xs = e1(xs, 70)
+    xs = e1(xs, 65)
+    hold rjmp = len(xs)
+    xs = e1(xs, 235)
+    xs = e1(xs, 0)
+    hold rend = len(xs)
+    // mov byte[esi],10 ; mov eax,[buf] ; mov [retpair],eax ; mov eax,ecx
+    xs = e1(xs, 198)
+    xs = e1(xs, 6)
+    xs = e1(xs, 10)
+    xs = e1(xs, 184)
+    xs = e32(xs, io_abs(32))
+    xs = e1(xs, 163)
+    xs = e32(xs, dva_of(fn_retpair))
+    xs = e1(xs, 139)
+    xs = e1(xs, 193)
+    xs = e1(xs, 163)
+    xs = e32(xs, dva_of(fn_retpair) + 4)
+    xs = patch_rel8(xs, rge, rend - (rge + 2))
+    xs = patch_rel8(xs, rje, rend - (rje + 2))
+    xs = patch_rel8(xs, rjmp, rl - (rjmp + 2))
+  } otherwise {
+    when ah == 2 {
+      // addi x7,x0,lo ; ... the loop runs x7 over the buffer, x15 counts, x9
+      // holds the byte count and x28 the byte under test.
+      xs = rv_li32(xs, 7, io_abs(32))
+      xs = rv_li32(xs, 15, 0)
+      xs = io_ld(xs, ah, io_abs(20))
+      xs = e_w(xs, rv_i(0, 10, 0, 9, 19))
+      hold rl2 = len(xs)
+      // bge x15,x9,end ; lb x28,0(x7) ; beq x28,x0,end
+      hold rbge = len(xs)
+      xs = e_w(xs, rv_b_word(0, 9, 15, 5))
+      xs = e_w(xs, rv_i(0, 7, 0, 28, 3))
+      hold rbeq = len(xs)
+      xs = e_w(xs, rv_b_word(0, 0, 28, 0))
+      // addi x7,x7,1 ; addi x15,x15,1 ; j loop
+      xs = e_w(xs, rv_i(1, 7, 0, 7, 19))
+      xs = e_w(xs, rv_i(1, 15, 0, 15, 19))
+      hold rjmp2 = len(xs)
+      xs = e_w(xs, rv_j_word(0, 0))
+      hold rend2 = len(xs)
+      // addi x28,x0,10 ; sb x28,0(x7) ; publish (buffer, count)
+      xs = e_w(xs, rv_i(10, 0, 0, 28, 19))
+      xs = e_w(xs, rv_s(0, 28, 7, 0))
+      xs = rv_li32(xs, 10, io_abs(32))
+      xs = io_st_acc(xs, ah, dva_of(fn_retpair))
+      xs = e_w(xs, rv_i(0, 15, 0, 10, 19))
+      xs = io_st_acc(xs, ah, dva_of(fn_retpair) + 4)
+      xs = set_w(xs, rbge, rv_b_word(rend2 - rbge, 9, 15, 5))
+      xs = set_w(xs, rbeq, rv_b_word(rend2 - rbeq, 0, 28, 0))
+      xs = set_w(xs, rjmp2, rv_j_word(rl2 - rjmp2, 0))
+    } otherwise {
+      // AArch64: x13 walks the buffer, x11 counts, x15 is the byte count and
+      // x12 the byte under test.
+      xs = a_abs(xs, 13, io_abs(32))
+      xs = a_movz(xs, 0, 11, 0)
+      xs = io_ld(xs, ah, io_abs(20))
+      xs = e_w(xs, 2852127727)
+      hold rl3 = len(xs)
+      // cmp w11,w15 ; b.ge end ; ldrb w12,[x13] ; cmp w12,#0 ; b.eq end
+      xs = e_w(xs, 1796145535)
+      hold rbge3 = len(xs)
+      xs = e_w(xs, 1409286154)
+      xs = e_w(xs, 960496044)
+      xs = e_w(xs, 1895825823)
+      hold rbeq3 = len(xs)
+      xs = e_w(xs, 1409286144)
+      // add x13,x13,#1 ; add w11,w11,#1 ; b loop
+      xs = e_w(xs, 2432697773)
+      xs = e_w(xs, 285214059)
+      hold rjmp3 = len(xs)
+      xs = e_w(xs, 335544320)
+      hold rend3 = len(xs)
+      // mov w14,#10 ; strb w14,[x13] ; publish (buffer, count)
+      xs = e_w(xs, 1384120654)
+      xs = e_w(xs, 956301742)
+      xs = io_imm(xs, ah, io_abs(32))
+      xs = io_st_acc(xs, ah, dva_of(fn_retpair))
+      xs = e_w(xs, 705364960)
+      xs = io_st_acc(xs, ah, dva_of(fn_retpair) + 4)
+      xs = a_imm19(xs, rbge3, rend3 - rbge3)
+      xs = a_imm19(xs, rbeq3, rend3 - rbeq3)
+      xs = a_imm26(xs, rjmp3, rl3 - rjmp3)
+    }
+  }
+  give emit_ret(xs, ah)
+}
+
+// One file-builtin call site. The path is pooled with the NUL the syscall needs
+// -- which is why only a literal is accepted -- and stored in the block;
+// write_file's text pair is copied in beside it; the shared routine is reached
+// through a forward call patched once it is placed. The result needs no argument
+// pop and no stack slot: write_file leaves 0 or 1 in the accumulator and
+// read_file publishes its `-> str` pair where emit_str_call already copies from.
+make emit_io_call(fi: num, patharg: str, textarg: str) -> num {
+  hold ior = io_reserve()
+  hold which = fn_retstr[fi]
+  when is_text_literal(patharg) == 0 {
+    hold badpath = fail(1, concat(concat("line ", numstr(lineno)), ": read_file and write_file take a string-literal path in native32, because the NUL the syscall stops at has to be pooled with it"))
+  }
+  hold pathoff = len(data)
+  data = append_text(data, sub(patharg, 1, len(patharg) - 1))
+  data = push(data, 0)
+  code = io_imm(code, arch, dva_of(pathoff))
+  code = io_st_acc(code, arch, io_abs(0))
+  when which == 0 {
+    when all_digits(textarg) == 1 {
+      hold numtext = fail(1, concat(concat("line ", numstr(lineno)), ": write_file's text must be a string, not a number"))
+    }
+    when slot_of(names, textarg) >= 0 && slot_of(strnames, textarg) < 0 {
+      hold numvar = fail(1, concat(concat("line ", numstr(lineno)), ": write_file's text must be a string, not a numeric variable"))
+    }
+    hold tslot = materialize_str_value(textarg)
+    hold tsrc = tslot
+    when fn_active >= 0 && tslot >= fn_frame_mark - 256 {
+      tsrc = frame_pair_to_abs(tslot)
+    }
+    hold tcopy = abs_pair_copy(tsrc, io_st[0] + 8)
+  }
+  hold cdisp = emit_call_here(arch)
+  io_st = push(io_st, cdisp)
+  io_st = push(io_st, which)
+  when which == 1 {
+    io_st[2] = 1
+  } otherwise {
+    io_st[1] = 1
+  }
+  give 0
+}
+
 make run() -> num {
   when arg_count() < 3 {
     hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
@@ -7145,9 +7671,11 @@ make run() -> num {
   hold main_only = lift_functions()
   src = main_only
   src = lift_structs()
+  hold ioscan = io_scan()
   lineno = 0
   hold em_walk = emit_statements()
-  when fn_count > 0 {
+  hold fnu = fn_user_count()
+  when fnu > 0 {
     depth_slot = len(data)
     data = put_zeros(data, 4)
     fp_slot = len(data)
@@ -7174,7 +7702,7 @@ make run() -> num {
   // function's parameters as the visible name table. The zero-fill immediate
   // of the prologue is patched after the walk, when the body's local word
   // count is final; recursion is legal because every invocation owns a frame.
-  when fn_count > 0 {
+  when fnu > 0 {
     // The shared recursion-overflow stub sits behind its own jump so the main
     // program cannot fall into it: reached only by the depth-check branches in
     // the prologues, it exits 1 with no output, exactly like the concat-heap
@@ -7204,7 +7732,7 @@ make run() -> num {
     code = emit_jmp(code, arch)
     hold fn_skip = len(code) - 4
     hold fi = 0
-    while fi < fn_count {
+    while fi < fnu {
       fn_off[fi] = len(code)
       hold saved_names = names
       hold saved_strnames = strnames
@@ -7269,6 +7797,24 @@ make run() -> num {
     }
   }
 
+  // The file-builtin routines, placed after the `make` bodies so a call from a
+  // body and a call from the program reach the same code, and behind a jump that
+  // skips them into the exit -- the image still ends with the process exit the
+  // container check pins.
+  when io_st[1] == 1 || io_st[2] == 1 {
+    code = emit_jmp(code, arch)
+    io_st[5] = len(code) - 4
+    when io_st[1] == 1 {
+      io_st[3] = len(code)
+      code = emit_io_write_routine(code, arch)
+    }
+    when io_st[2] == 1 {
+      io_st[4] = len(code)
+      code = emit_io_read_routine(code, arch)
+    }
+    io_st[6] = 1
+  }
+
   // A `string_eq` reached only from a `make` body still needs the shared
   // routine, and its call sites are only final now, so it is placed here
   // behind its own jump over the exit sequence. The skips and the sites are
@@ -7285,12 +7831,24 @@ make run() -> num {
   // exit(0)
   hold exit0_at = len(code)
   code = emit_exit0(code, arch)
-  when fn_count > 0 {
+  when fnu > 0 {
     // Now the jump over the recursion-overflow stub can target the exit.
     code = patch_jmp(code, arch, ov_stub_skip, exit0_at)
   }
   when eq_skip_pending == 1 {
     code = patch_jmp(code, arch, eq_skip, exit0_at)
+  }
+  when io_st[6] == 1 {
+    code = patch_jmp(code, arch, io_st[5], exit0_at)
+  }
+  hold ioc = 7
+  while ioc < len(io_st) {
+    hold iotgt = io_st[3]
+    when io_st[ioc + 1] == 1 {
+      iotgt = io_st[4]
+    }
+    code = patch_call(code, arch, io_st[ioc], iotgt)
+    ioc = ioc + 2
   }
   when eq_used == 1 {
     hold qc = 0

@@ -1,0 +1,20 @@
+// File I/O reaches the target's own syscall ABI: the span a write reports and
+// the NUL a read stops at are what all three encoders must agree on, and a path
+// the target cannot open is a refusal to report, not a fault. Paths stay
+// relative so the same image lands in the same place whether the host kernel or
+// the emulator runs it, and the unreadable one names a directory that never
+// exists -- so no run can leave a file that changes the next.
+hold w = write_file("selfhost/seed_tests/n32_file_io_probe.txt", "cross-isa-io")
+show w
+hold s = read_file("selfhost/seed_tests/n32_file_io_probe.txt")
+show s
+show len(s)
+hold t = write_file("selfhost/seed_tests/n32_file_io_probe.txt", concat(s, "!"))
+show t
+hold u = read_file("selfhost/seed_tests/n32_file_io_probe.txt")
+show u
+show len(u)
+hold g = write_file("selfhost/seed_tests/n32_file_io_dir/nope.txt", "never")
+show g
+hold m = read_file("selfhost/seed_tests/n32_file_io_dir/nope.txt")
+show len(m)

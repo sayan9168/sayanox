@@ -1,0 +1,2 @@
+hold w = write_file("selfhost/seed_tests/x.txt", 3)
+show w
