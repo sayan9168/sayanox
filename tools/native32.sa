@@ -558,12 +558,8 @@ hold listnames = ""
 // compiler within native_aot's 64-global limit. Instances use a $-prefixed
 // key in the already-scoped list table; $ cannot start a source identifier.
 hold struct_defs = ""
-// Where the shared string_eq routine landed, and whether it still has to be
-// placed after the `make` bodies (a body may be the only place that compares).
-hold eq_routine_at = 0
-hold eq_routine_emitted = 0
-hold eq_skip = 0
-hold eq_skip_pending = 0
+// The shared string_eq routine's placement state is local to run(); keeping
+// it out of the module table leaves room under native_aot's 64-global limit.
 hold eq_calls = []
 // The statement walk keeps its own state: the program text, the block stack and
 // the counters. run() resets them, and each `make` body is walked with a fresh
@@ -624,8 +620,9 @@ hold fn_count = 0
 hold fn_active = 0 - 1
 hold fn_gave = 0
 hold fn_last_give = 0
-hold call_site = []
-hold call_fn = []
+// Patch records for lifted function calls, flat [site, function, ...] pairs
+// in one list so the module stays inside native_aot's 64-global table.
+hold call_patch = []
 // Every name inside a body is addressed through the current frame base. The
 // base itself lives in a data word, not a register: the i386 concat copy
 // sequence uses every general register, so no register could be dedicated.
@@ -634,7 +631,6 @@ hold call_fn = []
 // (negative) -- which keeps frame slots distinguishable from absolute data
 // offsets by value alone.
 hold fn_frame_mark = 655360
-hold fn_depth_cap = 64
 hold depth_slot = 0 - 1
 hold fp_slot = 0 - 1
 // Frame-base scratch register per target: i386 keeps it in ebx, AArch64 in
@@ -825,6 +821,10 @@ make emit_load_word_i386(xs: list, s: num, reg: num) -> list {
 //   i386:   [fp+8+4k]   argument k   [fp] caller base   [fp-f*4 .. fp) locals
 //   arm/rv: [fp+16n+16-16k] argument k                   locals below fp
 make emit_fn_prologue(xs: list, arch: num) -> list {
+  // A compile-time constant, local to the only emitter that reads it: keeping
+  // it out of the module's global table leaves room for the file-I/O state
+  // under native_aot's 64-global limit.
+  hold fn_depth_cap = 64
   // depth check: load the depth word, compare with the cap, branch to the stub
   when arch == 0 {
     xs = e1(xs, 161)
@@ -1474,8 +1474,8 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str, sour
   // them after the call returns, into a scratch register so the result in the
   // accumulator survives.
   hold cdisp = emit_call_here(arch)
-  call_site = push(call_site, cdisp)
-  call_fn = push(call_fn, fi)
+  call_patch = push(call_patch, cdisp)
+  call_patch = push(call_patch, fi)
   hold popped = 0
   while popped < pushed {
     when arch == 0 {
@@ -7410,6 +7410,12 @@ make emit_io_call(fi: num, patharg: str, textarg: str) -> num {
 }
 
 make run() -> num {
+  // Placement of the shared string_eq routine: it may have to be emitted after
+  // the `make` bodies when a body is the only place that compares.
+  hold eq_routine_at = 0
+  hold eq_routine_emitted = 0
+  hold eq_skip = 0
+  hold eq_skip_pending = 0
   when arg_count() < 3 {
     hold usage = fail(2, "usage: native32 <program.sa> <out> [i386|arm64|riscv64]")
   }
@@ -7778,9 +7784,9 @@ make run() -> num {
     }
     code = patch_jmp(code, arch, fn_skip, len(code))
     hold cs = 0
-    while cs < len(call_site) {
-      code = patch_call(code, arch, call_site[cs], fn_off[call_fn[cs]])
-      cs = cs + 1
+    while cs < len(call_patch) {
+      code = patch_call(code, arch, call_patch[cs], fn_off[call_patch[cs + 1]])
+      cs = cs + 2
     }
     hold os = 0
     while os < len(ov_sites) {
@@ -7909,4 +7915,7 @@ make run() -> num {
   give 0
 }
 
-hold rc = run()
+// run() reports failures by exiting; its numeric result is not read. Calling
+// it from a guard keeps the side effect without claiming a 65th global slot.
+when run() == 1 {
+}
