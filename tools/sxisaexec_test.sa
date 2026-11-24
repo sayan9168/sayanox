@@ -1183,6 +1183,57 @@ make test_negative_faults(dir: str) -> num {
   hold r_illr = run_command(concat("./tools/sxisaexec ", concat(sh_q(bad_r), " >/dev/null 2>&1")))
   hold c9 = assert_eq_num(r_illr, 1, "riscv64 illegal instruction fault")
 
+  // Unallocated 3-source shapes are refusals, not silent answers. These four
+  // words differ only in op31 / Ra / o0 around the two multiply-high encodings,
+  // so if the decoder ever widened its acceptance these would start exiting 0
+  // with a wrong value in x10 instead of faulting. op31 = 011, 111 (bit 22 set
+  // but neither 010 nor 110), op31 = 010 with Ra != 11111, and op31 = 110 with
+  // o0 set are all unallocated. The words are built rather than pasted so the
+  // fields stay legible next to the architectural layout.
+  hold un = []
+  // op31 = 011, 111: bit 22 set but the pattern is neither 010 nor 110.
+  un = tb_word(un, 2147483648 + 452984832 + 3 * 2097152 + 8 * 65536 + 31 * 1024 + 7 * 32 + 10)
+  un = tb_word(un, 2147483648 + 452984832 + 7 * 2097152 + 8 * 65536 + 31 * 1024 + 7 * 32 + 10)
+  // op31 = 010 with Ra = 00011: SMULH requires Ra = 11111, so this shape is not
+  // SMULH and not SMADDL either (its bit 22 is set).
+  un = tb_word(un, 2147483648 + 452984832 + 2 * 2097152 + 8 * 65536 + 3 * 1024 + 7 * 32 + 10)
+  // op31 = 110 with o0 set: UMULH requires o0 = 0.
+  un = tb_word(un, 2147483648 + 452984832 + 6 * 2097152 + 8 * 65536 + 32768 + 31 * 1024 + 7 * 32 + 10)
+  // op31 = 100: bit 22 clear, so this is the one shape that is not unallocated
+  // for any reason visible in bits 23/21 alone -- it is unallocated because
+  // op54 = 10 has no 32-bit-long unsigned form. It is the shape that the old
+  // decoder answered as MADD, which is why it gets its own row.
+  un = tb_word(un, 2147483648 + 452984832 + 4 * 2097152 + 8 * 65536 + 31 * 1024 + 7 * 32 + 10)
+  hold cun = 0
+  hold urow = 0
+  while urow < 5 {
+    hold one = []
+    hold k = urow * 4
+    one = push(one, un[k])
+    one = push(one, un[k + 1])
+    one = push(one, un[k + 2])
+    one = push(one, un[k + 3])
+    // The unallocated word is followed by `mov w0, #0` and an exit, so the only
+    // way this image exits 0 is if the decoder accepted the word as some real
+    // instruction. Without the trailer a wrong decoder would run off the end
+    // onto a zero word, which also faults -- that would make the row impossible
+    // to pass for the right reason and impossible to fail for the wrong one.
+    one = tb_word(one, 1384120320)
+    one = tb_word(one, 1384123304)
+    one = tb_word(one, 3556769793)
+    hold up = concat(dir, concat("/unalloc3_", istr(urow)))
+    up = concat(up, ".arm64.elf")
+    when write_bytes(up, t_elf64(one, t_zeros([], 8), 183)) != 1 {
+      hold fuw = fail_t("write unalloc3 fixture")
+    }
+    hold urc = run_command(concat("./tools/sxisaexec --arch arm64 ", concat(sh_q(up), " >/dev/null 2>&1")))
+    when urc == 0 {
+      cun = cun + 1
+    }
+    urow = urow + 1
+  }
+  hold c10 = assert_eq_num(cun, 0, "unallocated 3-source shapes are refused")
+
   show "[ok] sxisaexec safety & negative controls verified (bad magic/class/machine, arch mismatch, step budget, illegal opcode)"
   give 0
 }
@@ -1977,6 +2028,300 @@ make t_arm_isa_mul_elf() -> list {
   hold data = []
   data = t_zeros(data, 640)
   give t_elf64(code, data, 183)
+}
+
+// ---- AArch64 SMULH / UMULH probe, and the RV64 M-extension twin ------------
+//
+// R20 item (4). Block 5 used to decode only `op31 = 00x` and `01x` with Ra != 31,
+// so `SMULH x10, x7, x8` (op31 = 010, Ra = 11111) was accepted as SMADDL and
+// answered with bits 63:0 of a 128-bit product where the architecture says bits
+// 127:64 -- a silently wrong answer with exit status 0, the same class as the
+// divide item that precedes it. `UMULH` (op31 = 110) was refused as unallocated.
+//
+// The expectations below are not typed in. Each one is rebuilt from a 64-bit
+// operand pair by tb_mulh_model, which forms the full 128-bit product one 16-bit
+// limb at a time (four 16x16 partial products per output limb, columns summed
+// into a carry chain) and then applies the signed correction in the pair domain.
+// Nothing above 2^32 is ever held as one value, and the model shares no code with
+// the emulator's a64_mul128 / a64_mulh. A row whose pinned limbs disagree with the
+// model fails the harness before any image is written.
+//
+// The RV64 half is the same arithmetic on the M extension, which had only the
+// 32-bit forms: MUL / MULH / MULHU (64-bit) and DIV / DIVU / REM / REMU were not
+// decoded at all, and SLLI/SRLI/SRAI -- the shift-immediate group, which is how a
+// 64-bit constant is built without a load -- was missing too, so those images were
+// refused rather than answered. tb_rv_rows emits their probe rows the same way.
+make tb_p16(bs: list, v: num) -> list {
+  bs = push(bs, bit_and(v, 255))
+  bs = push(bs, bit_and(shr(v, 8), 255))
+  give bs
+}
+
+make tb_p32(bs: list, v: num) -> list {
+  bs = tb_p16(bs, bit_and(v, 65535))
+  bs = tb_p16(bs, shr(v, 16))
+  give bs
+}
+
+make tb_word(bs: list, w: num) -> list {
+  bs = tb_p32(bs, w)
+  give bs
+}
+
+// mov x<rd>, #(h0 | h1<<16 | h2<<32 | h3<<48): always four words, so a constant
+// is never dependent on whether one of its lanes happens to be zero.
+make tb_mov64_abc(bs: list, rd: num, h0: num, h1: num, h2: num, h3: num) -> list {
+  bs = tb_word(bs, 3531603968 + h0 * 32 + rd)
+  bs = tb_word(bs, 4068474880 + 2097152 + h1 * 32 + rd)
+  bs = tb_word(bs, 4068474880 + 4194304 + h2 * 32 + rd)
+  bs = tb_word(bs, 4068474880 + 6291456 + h3 * 32 + rd)
+  give bs
+}
+
+// mov x<rd>, #(c0 | c1<<11 | ... | c5<<55): LUI seeds the top 11-bit chunk and
+// each step shifts left by 11 and adds the next chunk below it. Exact for a
+// chunk field that fits 11 bits, which is why the tables are kept in that form.
+make tb_mov64_chunks(bs: list, rd: num, c0: num, c1: num, c2: num, c3: num, c4: num, c5: num) -> list {
+  // Six 11-bit chunks describe 66 bits, so the builder starts from c5 as a plain
+  // ADDI and shifts left 11 five times: that puts c5 at bit 55, which is where it
+  // belongs for a 64-bit constant. Starting with LUI instead (c5 << 12) put the
+  // top chunk three bits too high and silently dropped bits 63:56 -- the operand
+  // came out as 0x709abc56781234 rather than 0xdef09abc56781234, which is why
+  // every row of this probe disagreed for a while.
+  bs = tb_word(bs, c5 * 1048576 + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(rd, 15) + shl(rd, 7) + 27)
+  bs = tb_word(bs, shl(11, 20) + shl(rd, 15) + shl(1, 12) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(c4, 20) + shl(rd, 15) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(11, 20) + shl(rd, 15) + shl(1, 12) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(c3, 20) + shl(rd, 15) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(11, 20) + shl(rd, 15) + shl(1, 12) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(c2, 20) + shl(rd, 15) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(11, 20) + shl(rd, 15) + shl(1, 12) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(c1, 20) + shl(rd, 15) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(11, 20) + shl(rd, 15) + shl(1, 12) + shl(rd, 7) + 19)
+  bs = tb_word(bs, shl(c0, 20) + shl(rd, 15) + shl(rd, 7) + 19)
+  give bs
+}
+
+// tb_mulh_model: the high 64 bits of a 64x64 product, computed as eight 16-bit
+// limbs and then adjusted for the two sign bits. limbs[j] is bits 16j+15..16j of
+// the 128-bit product. out receives the four limbs of the high half, low first.
+make tb_mulh_model(al: num, ah: num, bl: num, bh: num, nneg: num, dneg: num, out: list) -> num {
+  hold a0 = bit_and(al, 65535)
+  hold a1 = shr(al, 16)
+  hold a2 = bit_and(ah, 65535)
+  hold a3 = shr(ah, 16)
+  hold b0 = bit_and(bl, 65535)
+  hold b1 = shr(bl, 16)
+  hold b2 = bit_and(bh, 65535)
+  hold b3 = shr(bh, 16)
+  hold c0 = a0 * b0
+  hold c1 = a0 * b1 + a1 * b0
+  hold c2 = a0 * b2 + a1 * b1 + a2 * b0
+  hold c3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0
+  hold c4 = a1 * b3 + a2 * b2 + a3 * b1
+  hold c5 = a2 * b3 + a3 * b2
+  hold c6 = a3 * b3
+  hold L = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold s = c0
+  L[0] = bit_and(s, 65535)
+  s = c1 + (s - L[0]) / 65536
+  L[1] = bit_and(s, 65535)
+  s = c2 + (s - L[1]) / 65536
+  L[2] = bit_and(s, 65535)
+  s = c3 + (s - L[2]) / 65536
+  L[3] = bit_and(s, 65535)
+  s = c4 + (s - L[3]) / 65536
+  L[4] = bit_and(s, 65535)
+  s = c5 + (s - L[4]) / 65536
+  L[5] = bit_and(s, 65535)
+  s = c6 + (s - L[5]) / 65536
+  L[6] = bit_and(s, 65535)
+  L[7] = (s - L[6]) / 65536
+  // hi(ua*ub) = L[4..7]; the signed case subtracts ub (when the dividend is
+  // negative) and ua (when the divisor is), as whole 64-bit pairs.
+  hold f0 = 0
+  hold f1 = 0
+  hold f2 = 0
+  hold f3 = 0
+  when nneg == 1 {
+    f0 = bit_and(bl, 65535)
+    f1 = shr(bl, 16)
+    f2 = bit_and(bh, 65535)
+    f3 = shr(bh, 16)
+  }
+  when dneg == 1 {
+    hold g0 = bit_and(al, 65535)
+    hold g1 = shr(al, 16)
+    hold g2 = bit_and(ah, 65535)
+    hold g3 = shr(ah, 16)
+    hold t0 = f0 + g0
+    f0 = bit_and(t0, 65535)
+    hold t1 = f1 + g1 + (t0 - f0) / 65536
+    f1 = bit_and(t1, 65535)
+    hold t2 = f2 + g2 + (t1 - f1) / 65536
+    f2 = bit_and(t2, 65535)
+    f3 = bit_and(f3 + g3 + (t2 - f2) / 65536, 65535)
+  }
+  hold d0 = L[4] - f0
+  hold bw = 0
+  when d0 < 0 {
+    d0 = d0 + 65536
+    bw = 1
+  }
+  hold d1 = L[5] - f1 - bw
+  bw = 0
+  when d1 < 0 {
+    d1 = d1 + 65536
+    bw = 1
+  }
+  hold d2 = L[6] - f2 - bw
+  bw = 0
+  when d2 < 0 {
+    d2 = d2 + 65536
+    bw = 1
+  }
+  hold d3 = L[7] - f3 - bw
+  when d3 < 0 {
+    d3 = d3 + 65536
+  }
+  out[0] = bit_and(d0, 65535)
+  out[1] = bit_and(d1, 65535)
+  out[2] = bit_and(d2, 65535)
+  out[3] = bit_and(d3, 65535)
+  give 0
+}
+
+// One AArch64 row: two 64-bit operands, the op31 selecting SMULH (010) or UMULH
+// (110), and the four expected limbs of the high half. `dst` is the destination
+// register, so a row can also prove Ra = 11111 is read as the zero register
+// rather than as a real accumulate.
+make tb_mulh_row(code: list, kind: num, a0: num, a1: num, a2: num, a3: num, b0: num, b1: num, b2: num, b3: num, e0: num, e1: num, e2: num, e3: num) -> list {
+  hold out = [0, 0, 0, 0]
+  hold nneg = 0
+  hold dneg = 0
+  when kind == 2 {
+    when a3 >= 32768 {
+      nneg = 1
+    }
+    when b3 >= 32768 {
+      dneg = 1
+    }
+  }
+  hold za = tb_mulh_model(a0 + a1 * 65536, a2 + a3 * 65536, b0 + b1 * 65536, b2 + b3 * 65536, nneg, dneg, out)
+  when out[0] != e0 || out[1] != e1 || out[2] != e2 || out[3] != e3 {
+    hold m = fail_t(concat(concat(concat("the multiply model disagrees with a pinned SMULH/UMULH row, model limbs ", numstr(out[0])), concat(" ", concat(numstr(out[1]), concat(" ", concat(numstr(out[2]), concat(" ", numstr(out[3]))))))), concat(", pinned ", concat(numstr(e0), concat(" ", concat(numstr(e1), concat(" ", concat(numstr(e2), concat(" ", numstr(e3))))))))))
+  }
+  code = tb_mov64_abc(code, 24, a0, a1, a2, a3)
+  code = tb_mov64_abc(code, 25, b0, b1, b2, b3)
+  // Data-processing 3-source: sf=1, 11011, op31, Rm, o0=0, Ra=11111, Rn, Rd.
+  code = tb_word(code, 2147483648 + 452984832 + kind * 2097152 + 25 * 65536 + 31 * 1024 + 24 * 32 + 10)
+  code = tb_mov64_abc(code, 11, e0, e1, e2, e3)
+  code = tb_word(code, 3942645791 + 11 * 65536 + 10 * 32)
+  code = tb_word(code, 446629856 + 21)
+  code = tb_word(code, 184549376 + 21 * 65536 + 20 * 32 + 20)
+  give code
+}
+
+// The image: a zeroed failure counter in w20, every row, then exit(w20). A row
+// that disagrees sets one bit of the exit status, so the gate names the row by
+// its exit code rather than only reporting that something is wrong.
+make tb_arm_mulh_elf() -> list {
+  hold code = []
+  code = tb_word(code, 1384120340)
+  // UMULH of 0xdef09abc56781234 x 0x1111222233334444 = 0x0edce5fa8557dbe3
+  // (limbs 56869 34135 58874 3804, high first read as 0x0edc_e5fa_8557_dbe3).
+  code = tb_mulh_row(code, 6, 4660, 22136, 39612, 57072, 17476, 13107, 8738, 4369, 56291, 34135, 58874, 3804)
+  // SMULH of the same pair (negative x positive) = 0xfdcbc3d85224979f, which is
+  // the unsigned answer minus 0x1111222233334444 -- the correction term, and the
+  // reason a wrong sign rule cannot pass both adjacent rows.
+  code = tb_mulh_row(code, 2, 4660, 22136, 39612, 57072, 17476, 13107, 8738, 4369, 38815, 21028, 50136, 64971)
+  // Only Rm (= x25) negative: Rn stays positive, so of the two signed correction
+  // terms only the Rm one applies. SMULH and UMULH of the same pair are adjacent
+  // and differ by exactly that term, which is what a decode that dropped it would
+  // have to get wrong twice in a row to pass this. (The rows above have Rn
+  // negative and Rm positive, which covers the mirror image; between the two
+  // groups both correction terms are pinned separately.)
+  code = tb_mulh_row(code, 2, 57072, 39612, 22136, 4660, 4660, 22136, 39612, 57072, 10236, 60702, 10389, 64934)
+  code = tb_mulh_row(code, 6, 57072, 39612, 22136, 4660, 4660, 22136, 39612, 57072, 1772, 34779, 32526, 4058)
+  // SMULH of negative x negative: both corrections apply, and the architectural
+  // answer is positive again, so a decoder that simply negated the unsigned high
+  // half would fail this row while passing the two above.
+  code = tb_mulh_row(code, 2, 4660, 22136, 39612, 57072, 4660, 22136, 39612, 57072, 24291, 30641, 63752, 1092)
+  // UMULH of 2^63 x 16 = 8, whose low half is not zero.
+  code = tb_mulh_row(code, 6, 0, 0, 0, 32768, 16, 0, 0, 0, 8, 0, 0, 0)
+  // UMULH of 0 x 0 stays zero: a row whose answer cannot be reached by an
+  // accumulate from Ra, which is what the old decoding effectively did.
+  code = tb_mulh_row(code, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+  code = tb_word(code, 705954784)
+  code = tb_word(code, 1384123304)
+  code = tb_word(code, 3556769793)
+  hold data = []
+  data = t_zeros(data, 640)
+  give t_elf64(code, data, 183)
+}
+
+// ---- RV64 M extension probe ------------------------------------------------
+// Fills out with the four 11-bit chunks of the 64-bit value whose parts are
+// given; the table keeps every operand in that shape so the image builder only
+// ever shifts an 11-bit field into place.
+make tb_rv_rows(code: list, a0: num, a1: num, a2: num, a3: num, a4: num, a5: num, b0: num, b1: num, b2: num, b3: num, b4: num, b5: num) -> list {
+  code = tb_mov64_chunks(code, 1, a0, a1, a2, a3, a4, a5)
+  code = tb_mov64_chunks(code, 2, b0, b1, b2, b3, b4, b5)
+  give code
+}
+
+// rv_r(funct7, rs2, rs1, funct3, rd, opcode): one R-type word.
+make tb_rv_r(f7: num, rs2: num, rs1: num, f3: num, rd: num, op: num) -> num {
+  give f7 * 33554432 + rs2 * 1048576 + rs1 * 32768 + f3 * 4096 + rd * 128 + op
+}
+
+// Count a mismatch between x<rs> and x4 into w20 without branching: both
+// strict-inequality orders are ORed in, so equality adds zero and any difference
+// adds one. Neither side is compared as signed, so a result with bit 63 set is
+// still ordered numerically.
+make tb_rv_compare(code: list, rs: num) -> list {
+  code = tb_word(code, shl(0, 20) + shl(0, 15) + shl(21, 7) + 19)
+  code = tb_word(code, tb_rv_r(0, 4, rs, 3, 22, 51))
+  code = tb_word(code, tb_rv_r(0, rs, 4, 3, 23, 51))
+  code = tb_word(code, tb_rv_r(0, 22, 20, 0, 20, 51))
+  code = tb_word(code, tb_rv_r(0, 23, 20, 0, 20, 51))
+  give code
+}
+
+make tb_rv_mul_elf() -> list {
+  hold code = []
+  code = tb_word(code, shl(20, 7) + 19)
+  // x1 = 0xdef09abc56781234, x2 = 0x1111222233334444
+  code = tb_rv_rows(code, 564, 1794, 345, 1374, 1801, 445, 1092, 1640, 204, 273, 274, 34)
+  // MULH x3, x1, x2 = 0xfdcbc3d85224979f
+  code = tb_word(code, tb_rv_r(1, 2, 1, 1, 3, 51))
+  code = tb_mov64_chunks(code, 4, 1951, 1170, 328, 492, 1212, 507)
+  code = tb_rv_compare(code, 3)
+  // MULHU x5, x1, x2 = 0x0edce5fa8557dbe3, in 11-bit chunks like every other
+  // constant here (an earlier draft wrote it as 16-bit limbs, which expands to a
+  // different number and made this row fail for a reason that was not the
+  // emulator's).
+  code = tb_word(code, tb_rv_r(1, 2, 1, 3, 5, 51))
+  code = tb_mov64_chunks(code, 4, 995, 763, 533, 765, 1486, 29)
+  code = tb_rv_compare(code, 5)
+  // MUL x5, x1, x2 = 0x91939972d916a5d0 (low half of the same product)
+  code = tb_word(code, tb_rv_r(1, 2, 1, 0, 5, 51))
+  code = tb_mov64_chunks(code, 4, 1488, 724, 868, 1209, 313, 291)
+  code = tb_rv_compare(code, 5)
+  // DIVU x5, x1, x2 = 0xd
+  code = tb_word(code, tb_rv_r(1, 2, 1, 5, 5, 51))
+  code = tb_mov64_chunks(code, 4, 13, 0, 0, 0, 0, 0)
+  code = tb_rv_compare(code, 5)
+  // exit(x20): the mismatch counter is in a0 and a7 carries the syscall number.
+  // Without this the image always exited 0 and no row could fail -- the RV half
+  // of this probe was unfalsifiable until it was added.
+  code = tb_word(code, 656659)
+  code = tb_word(code, 97519763)
+  code = tb_word(code, 115)
+  hold data = []
+  data = t_zeros(data, 640)
+  give t_elf64(code, data, 243)
 }
 
 // ---- AArch64 divide probe -------------------------------------------------
@@ -2943,6 +3288,10 @@ make test_arm64_isa_coverage(dir: str) -> num {
   hold s_fp = concat(dir, "/isa_fp.arm64.stats")
   hold e_ctrl = concat(dir, "/isa_ctrl.arm64.elf")
   hold s_ctrl = concat(dir, "/isa_ctrl.arm64.stats")
+  hold e_mulh = concat(dir, "/isa_mulh.arm64.elf")
+  hold s_mulh = concat(dir, "/isa_mulh.arm64.stats")
+  hold e_rvmul = concat(dir, "/isa_rvmul.riscv64.elf")
+  hold s_rvmul = concat(dir, "/isa_rvmul.riscv64.stats")
   when write_bytes(e_shift, t_arm_isa_shift_elf()) != 1 {
     hold fshift = fail_t("cannot write the shift AArch64 fixture")
   }
@@ -2964,6 +3313,12 @@ make test_arm64_isa_coverage(dir: str) -> num {
   when write_bytes(e_ctrl, t_arm_isa_ctrl_elf()) != 1 {
     hold fctrl = fail_t("cannot write the ctrl AArch64 fixture")
   }
+  when write_bytes(e_mulh, tb_arm_mulh_elf()) != 1 {
+    hold fmulh = fail_t("cannot write the SMULH/UMULH AArch64 fixture")
+  }
+  when write_bytes(e_rvmul, tb_rv_mul_elf()) != 1 {
+    hold frvmul = fail_t("cannot write the RV64 M-extension fixture")
+  }
   when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_shift), concat(" ", sh_q(e_shift))))) != 0 {
     hold gshift = fail_t("AArch64 shift probes did not all match")
   }
@@ -2984,6 +3339,16 @@ make test_arm64_isa_coverage(dir: str) -> num {
   }
   when run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_ctrl), concat(" ", sh_q(e_ctrl))))) != 0 {
     hold gctrl = fail_t("AArch64 ctrl probes did not all match")
+  }
+  // A non-zero status is the number of rows the multiply probe disagreed on, so
+  // the failure says which row rather than only that one did.
+  hold mulh_rc = run_command(concat("./tools/sxisaexec --arch arm64 --stats ", concat(sh_q(s_mulh), concat(" ", sh_q(e_mulh)))))
+  when mulh_rc != 0 {
+    hold gmulh = fail_t(concat("SMULH/UMULH rows disagreed: ", istr(mulh_rc)))
+  }
+  hold rvmul_rc = run_command(concat("./tools/sxisaexec --arch riscv64 --stats ", concat(sh_q(s_rvmul), concat(" ", sh_q(e_rvmul)))))
+  when rvmul_rc != 0 {
+    hold grvmul = fail_t(concat("RV64 M-extension rows disagreed: ", istr(rvmul_rc)))
   }
   show "[ok] AArch64 bit field, CSEL, multiply, divide, load/store, scalar FP and branch probes match their expectations"
   give 0

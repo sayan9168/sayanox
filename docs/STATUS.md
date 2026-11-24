@@ -1,5 +1,37 @@
 # Status
 
+**2026-11-24 local R20 increment: `SMULH`/`UMULH` decode and the RV64 64-bit M extension**
+
+The AArch64 3-source multiply group decoded `SMULH` as `SMADDL`: block 5 tested
+bit 23 where the discriminator is bit 22, so `SMULH x10, x7, x8` multiplied the
+two 32-bit halves and answered bits 63:0 of the product where the architecture
+asks for bits 127:64. `UMULH` was refused outright. Both now decode through
+`a64_mulh` on bit 22 with `Ra == 11111` and `sf == 1`; `op31 = 011 / 100 / 111`
+are refused explicitly by clauses that keep `op31 = 101` (`UMADDL`) working.
+R20 item 4 was originally written as "refuse the shape" -- the probe showed these
+are real instructions with a silently wrong answer, so the increment decodes them,
+and **no refusal-matrix count moves**.
+
+The same fixture covers RV64, which had no 64-bit M-extension at all: `rv_m64`
+and `rv_div64` implement `MUL`/`MULH`/`MULHSU`/`MULHU` and
+`DIV`/`DIVU`/`REM`/`REMU`, with an RV64 twin image covering `MULH`, `MULHU`,
+`MUL`, `DIVU`. The AArch64 image pins 7 rows across all four sign combinations
+(a wrong sign rule cannot pass adjacent rows); the unallocated control pins 5
+refused shapes, each image ending in a real `exit(0)` so acceptance is
+observable. Seven deliberate breaks were applied and each was caught by a named
+row. Three of the seven did not fire on their first attempt -- one because the
+fixture had no negative `Rm`, one because "accepted then fell off the end" and
+"refused" both exited non-zero, and one because the RV image exited 0
+unconditionally -- and the fixture was corrected each time rather than the control
+being recorded as passing. Those two RV defects (`rv_m64` transposing the high
+half, `signd` inverted so `DIVU`/`REMU` read as signed) were found by making the
+probe falsifiable and never shipped. See
+[the gate log](gate-logs/2026-11-24-aarch64-multiply-high.md).
+
+Still open on R20: `MULHSU`/`DIV`/`REM`/`REMU` share exercised code paths but no
+row names them directly, the 32-bit `MULW`/`DIVW`/`REMUW` words are unchanged,
+and item 3 (per-case FP arithmetic probes) is untouched.
+
 **2026-11-24 main CI repair: native32 global budget and full-contract pins**
 
 `tools/native32.sa` had 66 module-level `hold` declarations after the file-I/O
@@ -80,8 +112,9 @@ in the `(lo, hi)` pair domain, pinned by 25 rows that the gate itself generates 
 a hex table and checks against an independent limb model, with 15 deliberate breaks
 of the divide path each caught by a named row. See
 [the divide gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md). What stays open
-is named in R20 (RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, per-case FP
-arithmetic probes, and `SMULH`/`UMULH` decoding as `MADD`/`SMADDL`) and in R02
+is named in R20 (per-case FP arithmetic probes, and the RV64 forms that no row
+names directly -- `SMULH`/`UMULH` and the 64-bit RV64 M extension were closed on
+2026-11-24) and in R02
 (structs, growing lists, FP lowering, GC). See
 [the coverage gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
 
