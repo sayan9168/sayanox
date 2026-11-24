@@ -1,5 +1,29 @@
 # Status
 
+**2026-11-24 main CI repair: native32 global budget and full-contract pins**
+
+`tools/native32.sa` had 66 module-level `hold` declarations after the file-I/O
+increment, above native_aot's 64-variable phase-1 limit. That made
+`test-native-sxdefs` fail before it could write `expand.sa`, which in turn
+failed `test-driver` in the clean no-Makefile integration and both CI jobs on
+`main`. Seven state holders are now scoped to where they are used: the four
+`string_eq` placement words and the final unused `rc` live only in `run()`,
+`fn_depth_cap` is local to `emit_fn_prologue`, and the two call-patch lists are
+one flat `[site, fn, ...]` list. The module now has 59 top-level holders and
+emits byte-identical i386/AArch64/RV64 images. `test-native-sxdefs`, the three
+ISA gates, `test-sxisaexec` and fresh `test-driver` (including the no-Makefile
+nested chain) pass; the failing pre-fix gate is the regression control.
+
+The second CI failure was `true-selfhost-full`: `docs/full-language-v1.sha256`
+still pinned six pre-increment files (`REMAINING_WORK.md`, `native32.sa`,
+`sxenc_lib.sa`, `sxisa_gates_lib.sa`, `sxisaexec.sa`, `sxisaexec_test.sa`), so
+`sxfull verify` failed. The six rows and the manifest's own row in
+`bootstrap/sx.sha256` are refreshed to the current accepted sources; both
+manifests and `sxfull verify` now pass. This is a pin refresh, not a change to
+the published-language v1 clause inventory. The long full-acceptance chain was
+still running without a failure when this note was written; guarded remote CI
+remains the final proof.
+
 **2026-11-23 local R02 increment: `read_file`/`write_file` on the three native32
 targets, AArch64 ISA coverage in `sxisaexec`, and the 64-bit divide that coverage
 exposed**
