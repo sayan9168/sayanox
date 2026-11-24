@@ -261,7 +261,46 @@ open; R02 is not closed.
 | R18 | **Release publication identity — FIXED 2026-11-04** | `tools/sxrelease_lib.sa` tested and packaged `HEAD` and called `gh release create` without binding a new tag to the tested commit, so a dispatch could tag the default branch instead of the accepted checkout, and an existing tag was never checked. The tested commit is now resolved to a full 40-character id before packaging: the checkout must equal `GITHUB_SHA` when it is set, any existing remote tag (`git ls-remote --tags`) must already name that commit, an unreadable remote fails closed, the archive is cut from the resolved id (`git archive ... <commit>`, never `HEAD`), a new tag is created with `--target <commit>`, an existing or pushed tag is only verified (`--verify-tag`), and the remote tag is re-read after publication so a moved tag fails the run. The decisions and argv live in `tools/sxrelease_identity_lib.sa`; `./sx release-identity` runs the same resolution without packaging or calling `gh`. Evidence: `./sx target test-release-identity` executes 3 wiring facts, 30 pure decision/argv/parser facts and 9 real `./sx release-identity` sessions against a recording mock `git`/`gh` PATH (new tag, dispatch mismatch, tag mismatch, matching tag, annotated tag, tag-push event, unreadable remote, unresolvable HEAD, no dispatch commit), including \"the identity audit never runs `gh`\" and \"no archive/publish command is printed on failure\"; `test-ci-shape` now requires acceptance before publication, identity before packaging, and the argv in the identity module. Reopen only if a new publication path is added that bypasses `rl_identity_problem`/`rl_published_problem`. |
 | R19 | **Developer loop: REPL, project scaffolding, project tests — landed 2026-11-10; profiler landed 2026-11-12; debugger landed 2026-11-17; source line table, conditional breakpoints and inline SYSCALL VM support landed 2026-11-22** | `tools/sxrepl.sa`, `tools/sxcli.sa`, `tools/sxbench.sa` and `tools/sxirexec.sa` (`debug` / `debug-bundle`) cover the interactive/scripted developer loop. **Fifth step (2026-11-22):** `tools/sxemit_lib.sa` / `tools/sxpipeline_lib.sa` emit `SX_LINE_MAP` (`lines.map` + `lines.map.src`) with zero code/data byte overhead when unset; `sxirexec debug` loads the line table automatically for `line` (`l`) and `break line <n>`, supports register-conditional breakpoints (`if <reg> <op> <val>`), and executes inline `SYSCALL` (`SYS_write` fd 1/2, `SYS_exit`) plus `JP`/`JNP` in user IR (`mode == 1`). Pinned in `selfhost/debug_tests/cond_line.session.want` while keeping `fact.session.want` and `stdin.session.want` byte-for-byte unchanged. **Still open on this row:** no variable names or types in portable IR, no watchpoints, reverse execution or core dumps, no machine-binary debugger, no per-function/per-line runtime profiler or memory profiler, and no `readline` keybindings in the REPL. |
 
-| R20 | **`sxisaexec` AArch64/RV64 coverage gaps the 2026-11-23 probe work located (opened 2026-11-23)** | Three, each found while pinning the AArch64 ISA and deliberately not folded into that increment. (1) The AArch64 divide is 32-bit: block 6 reads only the low halves of `Rn`/`Rm`, divides with `div_u32`/`div_s32_arm` and writes through `set_arm_w`, so `UDIV`/`SDIV` with `sf = 1` cannot return a quotient above 2^32 and leave the high half clear. It is *accepted*, not refused, which is why no probe covers it -- adding one first needs a pair-domain divide. (2) RV64 executes `mulw`/`divuw`/`remuw` only, so it has no 64-bit `mul`/`mulh`/`div`/`rem` and the AArch64 probe images have no RV64 twin. (3) The scalar FP probes pin loads, `FMOV` and `FCVTZS`/`FCVTZU` per case; `FADD`/`FSUB`/`FDIV` keep the older whole-image fixture, where one wrong result can hide behind another. Refusal of unknown words was checked directly and is in place on both `main` and this branch (patching word 0 of a fixture with each of `UDF`, `0xFFFFFFFF`, `MRS`, `BRK`, `DSB`, `LDXR`, `STP`, `LDP`, `ORR v.16b`, `FCMP`, `FMADD`, `RBIT` exits 1 with an `illegal or unsupported instruction word` diagnostic), as is the refusal of unallocated shapes *inside* decoded groups, which `main` lacked. Each remaining item needs this increment's evidence bar: a per-case three-way check against a second execution of the same instruction, then a negative control showing the fixture would notice. |
+| R20 | **`sxisaexec` AArch64/RV64 coverage gaps the 2026-11-23 probe work located (opened 2026-11-23; item 1 FIXED 2026-11-23)** | Four, each found while pinning the AArch64 ISA and deliberately not folded into the increment that found it. (1) *Fixed 2026-11-23:* the AArch64 divide was 32-bit in both widths -- block 6 read only the low halves of `Rn`/`Rm`, divided with `div_u32`/`div_s32_arm` and wrote through `set_arm_w`, so `UDIV`/`SDIV` with `sf = 1` answered the low half and left the high one clear, and it was *accepted* rather than refused. `a64_div`/`a64_sdiv` now divide in the `(lo, hi)` pair domain (see [the gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md)), pinned by 25 generated rows with an independent limb model and 15 negative controls. (2) RV64 executes `mulw`/`divuw`/`remuw` only, so it has no 64-bit `mul`/`mulh`/`div`/`rem` and the AArch64 probe images have no RV64 twin. (3) The scalar FP probes pin loads, `FMOV` and `FCVTZS`/`FCVTZU` per case; `FADD`/`FSUB`/`FDIV` keep the older whole-image fixture, where one wrong result can hide behind another. (4) `SMULH`/`UMULH` are not decoded: block 5 dispatch tests `mid5 == 27` and consults bits 21 and 23, but never bit 22 or `Rm == 31`, so `SMULH x10, x7, x8` runs as `SMADDL` and returns bits 63:0 instead of 127:64 -- a silently wrong answer, and the same class of defect item (1) was. Refusing the shape is the preferred first step; a decoder needs the high-half product the `*MADDL` path already computes. Refusal of unknown words was checked directly and is in place on both `main` and this branch (patching word 0 of a fixture with each of `UDF`, `0xFFFFFFFF`, `MRS`, `BRK`, `DSB`, `LDXR`, `STP`, `LDP`, `ORR v.16b`, `FCMP`, `FMADD`, `RBIT` exits 1 with an `illegal or unsupported instruction word` diagnostic), as is the refusal of unallocated shapes *inside* decoded groups, which `main` lacked. Each remaining item needs the evidence bar item (1) used: an independent model of the operation, a per-case probe the generator can also emit one case at a time, and a negative-control matrix in which every deliberate break is caught by a named case. |
+### Increment log - 2026-11-23 (64-bit `UDIV`/`SDIV` in `sxisaexec`, R20 item 1)
+
+* **The divide gap was a silent-wrong, not a refusal.** `tools/sxisaexec.sa` decoded
+  `UDIV`/`SDIV` at both widths but executed both through `div_u32`/`div_s32_arm` and
+  `set_arm_w`, so a 64-bit quotient above 2^32 and any negative 64-bit quotient came
+  back wrong while the image still exited 0 -- every quotient at or above 2^32 and
+  every negative 64-bit quotient's sign. `main` behaves identically; the probe
+  work that opened R20 is what located it.
+* **`a64_div` / `a64_sdiv`.** Restoring long division over `(lo, hi)` u32 pairs, one
+  dividend bit per iteration, so no value needing more than 53 bits is ever held as
+  one `num`;
+  signed is magnitudes plus a sign fix-up, which is why the most-negative quotient
+  (`INT64_MIN / -1`) and a zero divisor need no special case beyond the architectured
+  zero. `sf == 0` keeps the old
+  32-bit path and the zero-extend. `native32` needed no change: it refuses `/`
+  outright and never emits a divide, so this is emulator coverage, not a lowering.
+* **The probe is generated by Sayanox, from Sayanox source, in the gate file.** The
+  language has no hex literal and a `num` cannot hold 2^64 - 1, so operands are hex
+  text parsed into 16-bit limbs; 25 rows carry their own expectation and an
+  independent limb model (`t_dv_uq`/`t_dv_sq`) re-derives every quotient and refuses
+  the file unless `q * d + r == n` and `r < d`, and the row's operands are 64-bit
+  pairs the model itself assembles. The gate image and the 25 single-row
+  images come from one walk (`t_div_rows(code, want)`), and `t_div_table_walk` proves
+  the rows tile the image, so attribution cannot drift from what is run.
+* **Negative control, 15 mutants.** Every deliberate break of the divide path is now
+  caught by a named row. The first 22-row table missed two of them outright: dropping
+  the borrow in the divide subtract changes no quotient in that set, so both borrow
+  mutants ran green -- which is what the three searched borrow-sensitive rows (20, 21,
+  22, each measured firing the borrow) are for.
+* **A branch proven dead, then deleted.** The shift-overflow carry in `a64_div` never
+  fires, because after each shift the running value is a *prefix* of the dividend and
+  the subtract only lowers it, so it cannot exceed 2^64 - 1 whatever the divisor is.
+  Measured as well: every operand pair at 6, 8 and 10 bits, 256x255 at 8 bits, 200k
+  random 12-bit pairs, 400k structured 64-bit pairs -- zero firings. The branch is
+  gone and a comment states the bound instead, because a branch no probe can reach is
+  a claim, not coverage.
+* `test-sxisaexec`, `test-native32`, `test-native-arm64` and `test-native-riscv64`
+  pass and `./sx migration` reports 241/241. Full evidence, including the mutant
+  table: [the gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md).
 
 ### Increment log - 2026-11-23 (native32 file I/O; AArch64 ISA coverage in the emulator)
 
@@ -300,7 +339,8 @@ open; R02 is not closed.
 * `test-sxisaexec`, `test-native32`, `test-native-arm64` and
   `test-native-riscv64` pass; `./sx migration` reports 241/241. R02 stays open
   (structs, growing lists, FP lowering, GC) and R20 records what this increment
-  deliberately left undone.
+  deliberately left undone; R20 item (1), the 32-bit-only AArch64 divide, was closed
+  on 2026-11-23 by the step below.
 
 ### Increment log - 2026-11-22 (Sayanox-original constructs across 8 execution paths; O(N log N) INI; json_deep unquotable-key refusal; debugger line table & conditional breakpoints)
 

@@ -594,9 +594,15 @@ compiler slice, not a claim of complete language or ABI coverage.
   `FCVTZS`/`FCVTZU` at both widths, and `BR`/`BLR`/`RET` — pinned case by case by
   `test-sxisaexec` (see
   [the gate log](gate-logs/2026-11-23-arm64-isa-coverage.md)). A word no decoder
-  claims is a refusal, not a skip; what is still unsupported is the 64-bit divide
-  (which answers from the 32-bit path) and RV64's missing 64-bit
-  `mul`/`mulh`/`div`/`rem` (R20).
+  claims is a refusal, not a skip. The 64-bit divide that used to answer from the
+  32-bit path is executed properly now (`a64_div`/`a64_sdiv`, pinned case by case by
+  25 generated rows and 15 negative controls; see
+  [the divide gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md)); what is
+  still unsupported is RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, per-case FP
+  arithmetic probes, and `SMULH`/`UMULH`, which still decode as `MADD`/`SMADDL` and
+  so answer the low half instead of the high one (R20). Note that none of this is
+  reachable from `native32` output yet: the compiler refuses `/` and `sxisaexec`
+  coverage is what makes a hand-written or future divide image checkable.
 - `tools/sxisaexec.sa` is written in Sayanox and enforces ELF, memory,
   alignment, instruction, syscall, and step-budget checks. See its source and
   `tools/sxisaexec_test.sa` for the exact emulator boundary.
