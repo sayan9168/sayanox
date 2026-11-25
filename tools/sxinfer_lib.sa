@@ -486,8 +486,24 @@ make expand_use(src: str, dir: str, depth: num) -> str {
       out = concat(out, expand_use(body, dir, depth + 1))
       handled = 1
     }
+    // `@budget(...)` is erased at phase 1, before any parser sees the text, so
+    // an unannotated program is byte-identical through this function. The line
+    // is replaced by a comment rather than removed, keeping the line numbering
+    // that diagnostics and the line table depend on.
+    hold budgetline = 0
+    hold isb = 0
+    when handled == 0 && q + 7 <= te && at(src, sn, q) == 64 && at(src, sn, q + 1) == 98 && at(src, sn, q + 2) == 117 && at(src, sn, q + 3) == 100 && at(src, sn, q + 4) == 103 && at(src, sn, q + 5) == 101 && at(src, sn, q + 6) == 116 {
+      isb = 1
+    }
+    when handled == 0 && isb == 1 {
+      budgetline = 1
+    }
     when handled != 1 {
-      out = concat(out, sub(src, ls, te))
+      when budgetline == 1 {
+        out = concat(out, "//")
+      } otherwise {
+        out = concat(out, sub(src, ls, te))
+      }
     }
     when le < sn {
       out = concat(out, "\n")

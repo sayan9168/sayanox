@@ -1,0 +1,14 @@
+// BUDGET.md §3 boundary: five locals against a declared four. The diagnostic
+// must name the function's line and both numbers. This file is deliberately
+// expected to fail, and is the fixture the gate's own bisection probe rewrites
+// to recover the proven cost, so it must stay next to the accepted fixtures.
+@budget(locals: 4)
+make quinc() -> num {
+  hold a = 1
+  hold b = 2
+  hold c = 3
+  hold d = 4
+  hold e = 5
+  give a + b + c + d + e
+}
+show quinc()

@@ -1,5 +1,85 @@
 # Status
 
+**2026-11-25: checked resource-budget contract (`@budget`)**
+
+`@budget(frames: 8, locals: 24, lists: 16)` on the line before a `make` declares
+a compile-time upper bound. `tools/native32.sa` checks it against the two facts it
+already owns -- `fn_frame_words[]` for locals and the `call_patch` graph for
+frames -- so the accounting agrees with the emitter instead of replacing it, and
+never guesses: any cost it cannot establish is a line-numbered refusal.
+
+Measured accounting, bisected before the checker was written: a `str` costs 2
+words, a `num` 0, a list literal one word per element, and an **empty-origin
+growing list 16 for `lists` but 17 for `locals`** (the latent capacity plus its
+name slot). That last distinction was wrong in the first draft of
+`docs/BUDGET.md` and in the independent model -- the compiler was refused by its
+own spec, the spec was corrected, and both now agree on every fixture.
+
+**Frames.** `native32` already had a 64-deep call guard; §2 turns it into a
+stated rule: any recursion cycle makes reachable depth the cap, so a recursive
+function declaring `frames` below 64 is refused, and an acyclic chain is costed
+exactly (a leaf reaches 1). A callee's own requirement is charged to the caller
+through the call site, and the diagnostic names the callee and both numbers.
+
+**Erasure.** The annotation is removed before any parser sees it, at four
+separate choke points: `selfhost/modules/compiler_text.sa` for the C lanes,
+`tools/sxinfer_lib.sa` for `native_aot` and `sxc_native`, and `tools/sxdefs.sa`
+(plus `tools/native32.sa`). All four substitute a comment rather than deleting the
+line, so line numbers in diagnostics and line tables are unchanged. `plain` and
+`plain_twin` are byte-identical on every lane, the six-way gate covers AArch64 and
+RV64IM, and the four pre-existing i386 pins (`fn` 8265, `recursion` 8259,
+`list_expr` 8252, `strfn` 8608) are unchanged.
+
+**Evidence.** New gate `./sx target test-fn-budget`: 12 accepted fixtures on three
+ISAs with frozen `.want`, a determinism rebuild and cross-ISA data equality each;
+22 refusal fixtures with 22 named diagnostic rows; the model gate bisects the
+compiler's own verdict to recover the proven cost and requires
+`selfhost/budget_model.sa` to agree on locals and lists for every fixture. Cross-lane
+parity runs the same `.want` on seed-min, gen2, `native_aot`, `sxc_native` and the
+IR VM; `test-sxisaexec` adds six-way rows for i386/arm64/riscv64. Six negative
+controls each flip a named row, and `tools/native32.sa` was restored byte-exact
+(`ad75a1c0…`). See [the gate log](gate-logs/2026-11-25-fn-budget.md).
+
+**Honest limits.** This is a static upper bound over the constructs the current
+subset can cost. It is not memory safety, not termination, not WCET, and not a
+heap/RSS bound for the conservative collector: allocation beyond the fixed caps
+and C-lane allocator overhead are outside it. Recursion cycles are refused rather
+than analysed. **R04 (precise GC) and R02 (full native parity) stay open**, and
+`@budget` is checked only by `native32` -- on the other lanes it is erased and an
+unsatisfied annotation is not reported.
+
+**2026-11-24 local R20 increment: `SMULH`/`UMULH` decode and the RV64 64-bit M extension**
+
+The AArch64 3-source multiply group decoded `SMULH` as `SMADDL`: block 5 tested
+bit 23 where the discriminator is bit 22, so `SMULH x10, x7, x8` multiplied the
+two 32-bit halves and answered bits 63:0 of the product where the architecture
+asks for bits 127:64. `UMULH` was refused outright. Both now decode through
+`a64_mulh` on bit 22 with `Ra == 11111` and `sf == 1`; `op31 = 011 / 100 / 111`
+are refused explicitly by clauses that keep `op31 = 101` (`UMADDL`) working.
+R20 item 4 was originally written as "refuse the shape" -- the probe showed these
+are real instructions with a silently wrong answer, so the increment decodes them,
+and **no refusal-matrix count moves**.
+
+The same fixture covers RV64, which had no 64-bit M-extension at all: `rv_m64`
+and `rv_div64` implement `MUL`/`MULH`/`MULHSU`/`MULHU` and
+`DIV`/`DIVU`/`REM`/`REMU`, with an RV64 twin image covering `MULH`, `MULHU`,
+`MUL`, `DIVU`. The AArch64 image pins 7 rows across all four sign combinations
+(a wrong sign rule cannot pass adjacent rows); the unallocated control pins 5
+refused shapes, each image ending in a real `exit(0)` so acceptance is
+observable. Seven deliberate breaks were applied and each was caught by a named
+row. Three of the seven did not fire on their first attempt -- one because the
+fixture had no negative `Rm`, one because "accepted then fell off the end" and
+"refused" both exited non-zero, and one because the RV image exited 0
+unconditionally -- and the fixture was corrected each time rather than the control
+being recorded as passing. Those two RV defects (`rv_m64` transposing the high
+half, `signd` inverted so `DIVU`/`REMU` read as signed) were found by making the
+probe falsifiable and never shipped. See
+[the gate log](gate-logs/2026-11-24-aarch64-multiply-high.md).
+
+Still open on R20: `MULHSU`/`DIV`/`REM`/`REMU` share exercised code paths but no
+row names them directly, the 32-bit `MULW`/`DIVW`/`REMUW` words are unchanged,
+and item 3 (per-case FP arithmetic probes) is untouched.
+
 **2026-11-24 main CI repair: native32 global budget and full-contract pins**
 
 `tools/native32.sa` had 66 module-level `hold` declarations after the file-I/O
@@ -80,8 +160,9 @@ in the `(lo, hi)` pair domain, pinned by 25 rows that the gate itself generates 
 a hex table and checks against an independent limb model, with 15 deliberate breaks
 of the divide path each caught by a named row. See
 [the divide gate log](gate-logs/2026-11-23-aarch64-64bit-divide.md). What stays open
-is named in R20 (RV64's missing 64-bit `mul`/`mulh`/`div`/`rem`, per-case FP
-arithmetic probes, and `SMULH`/`UMULH` decoding as `MADD`/`SMADDL`) and in R02
+is named in R20 (per-case FP arithmetic probes, and the RV64 forms that no row
+names directly -- `SMULH`/`UMULH` and the 64-bit RV64 M extension were closed on
+2026-11-24) and in R02
 (structs, growing lists, FP lowering, GC). See
 [the coverage gate log](gate-logs/2026-11-23-arm64-isa-coverage.md).
 

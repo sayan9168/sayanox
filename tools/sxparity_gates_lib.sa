@@ -707,6 +707,40 @@ make ep_ir() -> num {
   hold nx_vm = concat(dir, "/nx_vm")
   hold nx_vm_c = pg_capture(concat("./tools/sxirexec compile-and-run ", concat(sh_quote(nx_src), concat(" ", sh_quote(nx_vm)))), concat(dir, "/nx_vm.out"))
   hold nx_vm_eq = gl_assert_files_eq(nx_want, concat(dir, "/nx_vm.out"), "sayanox_next IR VM parity")
+
+  // ---- the @budget contract is backend-independent -------------------------
+  // Every fixture in selfhost/budget_tests carries a frozen .want. The lane
+  // matrix here is the point of the file: an annotation that one lane keeps and
+  // another erases would make the same program cost different amounts depending
+  // on who compiles it.
+  hold bg_names = "chain3\nlist_grow_fixed\nlist_sixteen\nlocals_exact\nplain\nplain_twin\nstrings_sixty\n"
+  hold bg_pos = 0
+  while bg_pos < len(bg_names) {
+    hold bg_start = bg_pos
+    while bg_pos < len(bg_names) && sx_index(bg_names, bg_pos) != 10 { bg_pos = bg_pos + 1 }
+    hold bg_name = gl_slice(bg_names, bg_start, bg_pos)
+    bg_pos = bg_pos + 1
+    when len(bg_name) > 0 {
+      hold bg_src = concat(concat("selfhost/budget_tests/", bg_name), ".sa")
+      hold bg_want = concat(concat("selfhost/budget_tests/", bg_name), ".want")
+      when path_kind(bg_want) != 1 {
+        hold bg_missing = gl_fail(concat("missing frozen .want: ", bg_want))
+      }
+      // The four compiler lanes $ep_ir already drives.
+      hold bg_k = 0
+      while bg_k < 4 {
+        hold bg_bin = concat(concat(concat(dir, "/bg_"), bg_name), gl_istr(bg_k))
+        hold bg_c = ep_compile(bg_k, bg_src, bg_bin)
+        hold bg_r = pg_capture(sh_quote(bg_bin), concat(bg_bin, ".out"))
+        hold bg_eq = gl_assert_files_eq(bg_want, concat(bg_bin, ".out"), concat(concat("budget fixture on lane ", gl_istr(bg_k)), concat(": ", bg_name)))
+        bg_k = bg_k + 1
+      }
+      // The portable IR VM.
+      hold bg_vm = concat(concat(dir, "/bgvm_"), bg_name)
+      hold bg_vmc = pg_capture(concat("./tools/sxirexec compile-and-run ", concat(sh_quote(bg_src), concat(" ", sh_quote(bg_vm)))), concat(bg_vm, ".out"))
+      hold bg_vmeq = gl_assert_files_eq(bg_want, concat(bg_vm, ".out"), concat("budget fixture on the IR VM: ", bg_name))
+    }
+  }
   give 0
 }
 

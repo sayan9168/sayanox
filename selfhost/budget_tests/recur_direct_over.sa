@@ -1,0 +1,10 @@
+// BUDGET.md §5: direct recursion with frames: 8 is a refusal, not an estimate.
+// Expected to FAIL.
+@budget(frames: 8)
+make down(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give down(n - 1)
+}
+show down(4)

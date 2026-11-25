@@ -1,0 +1,485 @@
+// The @budget contract gate: docs/BUDGET.md, implemented in tools/native32.sa.
+//
+// The gate is deliberately built around a second opinion. Every fixture is
+// compiled and its verdict recorded; the same fixture is then read by
+// selfhost/budget_model.sa, which derives the expected cost from BUDGET.md's
+// rule text alone and knows nothing about the compiler. The gate requires the
+// two to agree on locals and lists for every fixture, so a compiler change that
+// made both the checker and the emitter wrong in the same direction would still
+// fail here -- unless the model were wrong the same way, which is why the model
+// does not import anything from the compiler.
+
+make bg_native() -> str {
+  hold tool = "./tools/native32"
+  when path_kind(tool) != 1 {
+    hold e = gl_fail("missing ./tools/native32")
+  }
+  give tool
+}
+
+make bg_compile(source: str, out: str, arch: str) -> str {
+  give concat(concat(concat(bg_native(), " "), concat(gl_sh_quote(source), " ")), concat(gl_sh_quote(out), concat(" ", arch)))
+}
+
+// Compile and require success, capturing stderr so a refusal is legible.
+make bg_must_compile(source: str, out: str, arch: str, d: str) -> num {
+  hold log = kp_join(d, "compile.err")
+  hold cmd = concat(concat(bg_compile(source, out, arch), " 2> "), gl_sh_quote(log))
+  when run_command(concat("LC_ALL=C ", cmd)) != 0 {
+    hold e = gl_fail(concat(concat(concat("fixture did not compile: ", source), " -- "), read_file(log)))
+  }
+  give 0
+}
+
+// Compile and require a refusal.
+make bg_must_refuse(source: str, out: str, arch: str, d: str) -> num {
+  hold log = kp_join(d, "refuse.err")
+  hold cmd = concat(concat(bg_compile(source, out, arch), " 2> "), gl_sh_quote(log))
+  when run_command(concat("LC_ALL=C ", cmd)) == 0 {
+    hold e = gl_fail(concat("expected a refusal but it compiled: ", source))
+  }
+  // A refusal must be a diagnostic, not a crash: the message must name the
+  // construct. native32's own prefix is the marker every refusal carries.
+  when pg_find(read_file(log), "native32: ") < 0 {
+    hold e2 = gl_fail(concat("refusal without a native32 diagnostic: ", source))
+  }
+  give 0
+}
+
+// The model's line for the first make of `source`, as "name locals lists".
+make bg_model_line(source: str, d: str) -> str {
+  hold model = "./selfhost/budget_model"
+  when path_kind(model) != 1 {
+    hold e = gl_fail("missing ./selfhost/budget_model; build it before the gate")
+  }
+  hold out = kp_join(d, "model.out")
+  hold cmd = concat(concat(gl_sh_quote(model), " "), gl_sh_quote(source))
+  cmd = concat(cmd, concat(" > ", gl_sh_quote(out)))
+  when run_command(concat("LC_ALL=C ", cmd)) != 0 {
+    hold e2 = gl_fail(concat("budget model failed on ", source))
+  }
+  hold text = read_file(out)
+  hold sp1 = pg_find(text, " ")
+  when sp1 < 0 {
+    give ""
+  }
+  give text
+}
+
+// The number at field `k` of the model's first line (0 = locals, 1 = lists).
+make bg_model_num(source: str, d: str, k: num) -> num {
+  hold text = bg_model_line(source, d)
+  hold sp1 = pg_find(text, " ")
+  when sp1 < 0 {
+    give 0 - 1
+  }
+  hold rest = gl_slice(text, sp1 + 1, len(text))
+  hold i = 0
+  hold field = 0
+  hold v = 0
+  hold started = 0
+  while i < len(rest) {
+    hold c = sx_index(rest, i)
+    when c == 32 || c == 10 {
+      when started == 1 {
+        when field == k {
+          give v
+        }
+        field = field + 1
+        v = 0
+        started = 0
+      }
+    } otherwise {
+      when c >= 48 && c <= 57 {
+        v = v * 10 + (c - 48)
+        started = 1
+      }
+    }
+    i = i + 1
+  }
+  when started == 1 && field == k {
+    give v
+  }
+  give 0 - 1
+}
+
+// The cost the compiler proved, recovered exactly from the compiler's own
+// verdict. A body is accepted at a declared `locals` of B exactly when its
+// proven cost is <= B (BUDGET.md §3), so the smallest accepted B *is* the proven
+// cost. Bisecting rather than parsing a message means the gate reads the same
+// number fn_frame_words[] drives, with no second implementation of the
+// arithmetic anywhere in it.
+make bg_probe(key: str, value: num, source: str, d: str, tag: str) -> num {
+  hold probe = kp_join(d, concat(tag, ".probe.sa"))
+  hold text = read_file(source)
+  hold patched = bg_rewrite(text, key, value)
+  when write_file(probe, patched) != 1 {
+    give 0 - 1
+  }
+  hold out = kp_join(d, concat(tag, ".probe.elf"))
+  hold log = kp_join(d, concat(tag, ".probe.err"))
+  hold cmd = concat(concat(bg_compile(probe, out, "i386"), " 2> "), gl_sh_quote(log))
+  give run_command(concat("LC_ALL=C ", cmd))
+}
+
+// Smallest accepted value of `key`, found by bisection over 1..cap.
+make bg_bisect(key: str, cap: num, source: str, d: str, tag: str) -> num {
+  hold lo = 1
+  hold hi = cap
+  // If the top of the range does not even compile the body is over the plateau
+  // the key can express; report -1 rather than a number that means nothing.
+  when bg_probe(key, hi, source, d, tag) != 0 {
+    give 0 - 1
+  }
+  while lo < hi {
+    hold mid = lo + (hi - lo - ((hi - lo) % 2)) / 2
+    when bg_probe(key, mid, source, d, tag) == 0 {
+      hi = mid
+    } otherwise {
+      lo = mid + 1
+    }
+  }
+  give lo
+}
+
+// The smallest declaration the grammar can express. BUDGET.md §1 refuses zero,
+// so a body that costs nothing is still only observable as a declared 1. This is
+// a fact about the annotation grammar, not about costing.
+make bg_legal_min(cost: num) -> num {
+  when cost < 1 {
+    give 1
+  }
+  give cost
+}
+
+// Rewrite one @budget value in `text`, keeping or inserting the annotation.
+// `value` of 0 means "delete the annotation line entirely".
+make bg_rewrite(text: str, key: str, value: num) -> str {
+  hold out = ""
+  hold n = len(text)
+  hold pos = 0
+  hold saw = 0
+  hold inserted = 0
+  while pos <= n {
+    hold eol = bg_find_byte(gl_slice(text, pos, n), 10, 0)
+    hold stop = n
+    when eol >= 0 {
+      stop = pos + eol
+    }
+    hold line = gl_slice(text, pos, stop)
+    pos = stop + 1
+    hold t = bg_trim(line)
+    hold isanno = 0
+    when len(t) >= 7 && sx_index(t, 0) == 64 && sx_index(t, 1) == 98 && sx_index(t, 2) == 117 {
+      isanno = 1
+    }
+    hold ismake = 0
+    when len(t) >= 5 && sx_index(t, 0) == 109 && sx_index(t, 1) == 97 && sx_index(t, 2) == 107 && sx_index(t, 3) == 101 {
+      ismake = 1
+    }
+    when isanno == 1 && saw == 0 && inserted == 0 {
+      // Replace the first annotation with a single-key one, or drop it.
+      saw = 1
+      when value > 0 {
+        out = concat(out, concat(concat(concat("@budget(", key), concat(": ", numstr(value))), ")\n"))
+        inserted = 1
+      }
+    } otherwise {
+      when ismake == 1 && inserted == 0 {
+        when value > 0 {
+          out = concat(out, concat(concat(concat("@budget(", key), concat(": ", numstr(value))), ")\n"))
+        }
+        inserted = 1
+      }
+      out = concat(out, concat(line, "\n"))
+    }
+  }
+  give out
+}
+
+// Byte offset of `want` at or after `from`, or -1. pg_find searches for a string,
+// which cannot express a bare newline.
+make bg_find_byte(s: str, want: num, from: num) -> num {
+  hold n = len(s)
+  hold i = from
+  while i < n {
+    when sx_index(s, i) == want {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make bg_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && (sx_index(s, a) == 32 || sx_index(s, a) == 9) {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && (sx_index(s, b - 1) == 32 || sx_index(s, b - 1) == 9) {
+    b = b - 1
+  }
+  when a >= b {
+    give ""
+  }
+  give gl_slice(s, a, b)
+}
+
+// First decimal integer after `marker` and before `stop` in `text`, or -1.
+make bg_parse_proven(text: str, marker: str, stop: str) -> num {
+  hold at = pg_find(text, marker)
+  when at < 0 {
+    give 0 - 1
+  }
+  hold from = at + len(marker)
+  hold v = 0
+  hold i = from
+  hold seen = 0
+  hold endat = pg_find(text, stop)
+  when endat < 0 {
+    endat = len(text)
+  }
+  while i < endat {
+    hold c = sx_index(text, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+      seen = 1
+    }
+    i = i + 1
+  }
+  when seen == 0 {
+    give 0 - 1
+  }
+  give v
+}
+
+// ---- the gate -------------------------------------------------------------
+
+// Accepted fixtures: compile on all three ISAs, run on i386, and the run must
+// match the frozen .want. Also: the model must agree with the compiler's proven
+// locals and lists.
+make bg_accept(d: str) -> num {
+  hold names = "chain1\nchain2\nchain3\nchain8\nlist_grow_fixed\nlist_sixteen\nlocals_exact\nplain\nplain_twin\nrecur_direct_cap\nrecur_mutual_cap\nstrings_sixty\n"
+  hold count = 0
+  hold pos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    when len(name) > 0 {
+      hold source = kp_join("selfhost/budget_tests", concat(name, ".sa"))
+      hold file = kp_join(d, concat(name, ".elf"))
+      count = count + 1
+      // Every ISA the emitter supports must accept the same declaration: the
+      // budget is a property of the source, not of a target.
+      hold ci = bg_must_compile(source, file, "i386", d)
+      hold ca = bg_must_compile(source, kp_join(d, concat(name, ".arm64.elf")), "arm64", d)
+      hold cr = bg_must_compile(source, kp_join(d, concat(name, ".riscv64.elf")), "riscv64", d)
+      // Determinism: a second build must be byte-identical.
+      hold again = bg_must_compile(source, kp_join(d, concat(name, ".again.elf")), "i386", d)
+      hold det = gl_assert_files_eq(file, kp_join(d, concat(name, ".again.elf")), concat("deterministic image: ", name))
+      // Cross-ISA data segments agree, per R14.
+      hold xd = xc_data(file, kp_join(d, concat(name, ".arm64.elf")))
+      // The frozen stdout.
+      hold want = kp_join("selfhost/budget_tests", concat(name, ".want"))
+      when path_kind(want) != 1 {
+        hold e3 = gl_fail(concat("missing frozen .want: ", want))
+      }
+      hold exe = xb_publish(file)
+      hold runfile = kp_join(d, concat(name, ".out"))
+      hold ran = pg_capture(gl_sh_quote(file), runfile)
+      hold same = gl_assert_files_eq(want, runfile, concat("frozen stdout: ", name))
+      // The independent model must agree on both numbers the compiler proved.
+      // Bisection recovers the proven cost from the compiler's own verdict, so
+      // this compares fn_frame_words[] against BUDGET.md's rule text.
+      hold provenl = bg_bisect("locals", 60, source, d, concat(name, ".L"))
+      hold mlocals = bg_model_num(source, d, 0)
+      hold lg = gl_assert_eq_num(bg_legal_min(mlocals), provenl, concat("model agrees with the compiler's proven locals: ", name))
+      hold provenx = bg_bisect("lists", 16, source, d, concat(name, ".X"))
+      hold mlists = bg_model_num(source, d, 1)
+      hold xg = gl_assert_eq_num(bg_legal_min(mlists), provenx, concat("model agrees with the compiler's proven lists: ", name))
+    }
+  }
+  give gl_assert_eq_num(count, 12, "accepted fixture count")
+}
+
+// The boundary fixtures that are expected to fail live next to the accepted ones
+// but carry no `.want`. Requiring every such file to refuse keeps them live
+// evidence instead of decoration, and stops a one-over fixture from silently
+// becoming an accepted one.
+make bg_no_want_refuses(d: str) -> num {
+  hold names = read_dir("selfhost/budget_tests")
+  hold pos = 0
+  hold checked = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold ln = len(name)
+    when ln >= 4 && string_eq(gl_slice(name, ln - 3, ln), ".sa") == 1 {
+      hold stem = gl_slice(name, 0, ln - 3)
+      hold want = kp_join("selfhost/budget_tests", concat(stem, ".want"))
+      when path_kind(want) != 1 {
+        checked = checked + 1
+        hold r = bg_must_refuse(kp_join("selfhost/budget_tests", name), kp_join(d, concat(stem, ".nowant.elf")), "i386", d)
+      }
+    }
+  }
+  give gl_assert_eq_num(checked, 8, "boundary fixtures without a .want must refuse")
+}
+
+// A refusal for the wrong reason is not coverage. Each rule gets a named
+// fixture whose diagnostic must contain the text only that rule can produce.
+make bg_diagnostic(d: str, fixture: str, needle: str) -> num {
+  hold source = kp_join("selfhost/native32_tests/budget_refuse", concat(fixture, ".sa"))
+  hold out = kp_join(d, concat(fixture, ".diag.elf"))
+  hold log = kp_join(d, concat(fixture, ".diag.err"))
+  hold cmd = concat(concat(bg_compile(source, out, "i386"), " 2> "), gl_sh_quote(log))
+  when run_command(concat("LC_ALL=C ", cmd)) == 0 {
+    hold e = gl_fail(concat("expected a refusal but it compiled: ", fixture))
+  }
+  when pg_find(read_file(log), needle) < 0 {
+    // Name the row explicitly: a generic backend failure elsewhere in the target
+    // must not be able to stand in for this one.
+    hold e2 = gl_fail(concat(concat(concat(concat("wrong diagnostic in row ", fixture), " for `"), needle), concat("`; got: ", bg_first_line(read_file(log)))))
+  }
+  give 0
+}
+
+// Refused fixtures: each must fail with a diagnostic, and the rules that have a
+// distinctive message must produce exactly that message.
+make bg_refuse(d: str) -> num {
+  hold dir = "selfhost/native32_tests/budget_refuse"
+  // The named rows run first: each pins one rule's own message, so a break names
+  // the fixture it broke instead of only a count.
+  // §2 -- a cycle's reachable depth is the cap, so a smaller declaration is a
+  // refusal. This is the row that a "cycle is just a chain" implementation flips.
+  hold r1 = bg_diagnostic(d, "cycle_below_cap", "may not declare @budget frames below the 64-frame cap")
+  hold r2 = bg_diagnostic(d, "mutual_cycle_below_cap", "may not declare @budget frames below the 64-frame cap")
+  // §1 -- grammar.
+  hold r3 = bg_diagnostic(d, "unknown_key", "unknown @budget key 'stack'")
+  hold r4 = bg_diagnostic(d, "duplicate_key", "repeats the locals key")
+  hold r5 = bg_diagnostic(d, "duplicate_frames_key", "repeats the frames key")
+  hold r6 = bg_diagnostic(d, "fractional_value", "needs a positive integer literal")
+  hold r7 = bg_diagnostic(d, "non_literal_value", "needs a positive integer literal")
+  hold r8 = bg_diagnostic(d, "zero_value", "must be greater than zero")
+  hold r9 = bg_diagnostic(d, "negative_value", "needs a positive integer literal")
+  hold r10 = bg_diagnostic(d, "above_cap_locals", "exceeds the 60 word/frame/element")
+  hold r11 = bg_diagnostic(d, "above_cap_lists", "exceeds the 16 word/frame/element")
+  hold r12 = bg_diagnostic(d, "above_cap_frames", "exceeds the 64 word/frame/element")
+  hold r13 = bg_diagnostic(d, "empty_budget", "@budget() constrains nothing")
+  hold r14 = bg_diagnostic(d, "not_before_make", "must precede a make declaration")
+  hold r15 = bg_diagnostic(d, "dangling_at_eof", "does not precede a make declaration")
+  hold r16 = bg_diagnostic(d, "two_before_one_make", "appears twice before one make")
+  hold r17 = bg_diagnostic(d, "malformed_no_parens", "needs a parenthesised key list")
+  hold r18 = bg_diagnostic(d, "missing_colon", "are `key: value`")
+  // §3 -- cost overruns name the number and the declaration.
+  hold r19 = bg_diagnostic(d, "locals_over", "over its declared @budget locals")
+  hold r20 = bg_diagnostic(d, "lists_over", "over its declared @budget lists")
+  // §6 -- the diagnostic must name the call site and both numbers, which is the
+  // row an implementation that only counts its own chain flips.
+  hold r21 = bg_diagnostic(d, "frames_over", "call to g needs 1 frames")
+  hold r22 = bg_diagnostic(d, "callee_frames_over", "call to deep needs 1 frames")
+  // Finally the count, so a refusal fixture added without a diagnostic row is
+  // still caught.
+  hold refusals = xc_refusals(dir, d, "i386", 0, 22)
+  give 0
+}
+
+// BUDGET.md's erasure rule: a satisfied @budget must be byte-invisible. The
+// twin pair proves it directly, and every pre-existing pinned image proves it
+// did not disturb anything else.
+make bg_erasure(d: str) -> num {
+  hold plain = kp_join(d, "plain_erase.elf")
+  hold twin = kp_join(d, "twin_erase.elf")
+  hold c1 = bg_must_compile("selfhost/budget_tests/plain.sa", plain, "i386", d)
+  hold c2 = bg_must_compile("selfhost/budget_tests/plain_twin.sa", twin, "i386", d)
+  hold same = gl_assert_files_eq(plain, twin, "an annotated program and its twin must emit identical images")
+  // The seven spec_example images with and without the annotation, across ISAs.
+  hold arch = "arm64"
+  hold a1 = bg_must_compile("selfhost/budget_tests/plain.sa", kp_join(d, "plain.arm64.elf"), "arm64", d)
+  hold a2 = bg_must_compile("selfhost/budget_tests/plain_twin.sa", kp_join(d, "twin.arm64.elf"), "arm64", d)
+  hold sameA = gl_assert_files_eq(kp_join(d, "plain.arm64.elf"), kp_join(d, "twin.arm64.elf"), "erasure on arm64")
+  hold r1 = bg_must_compile("selfhost/budget_tests/plain.sa", kp_join(d, "plain.riscv64.elf"), "riscv64", d)
+  hold r2 = bg_must_compile("selfhost/budget_tests/plain_twin.sa", kp_join(d, "twin.riscv64.elf"), "riscv64", d)
+  hold sameR = gl_assert_files_eq(kp_join(d, "plain.riscv64.elf"), kp_join(d, "twin.riscv64.elf"), "erasure on riscv64")
+  give 0
+}
+
+// Every pre-existing fixture that carried a pinned i386 size before this
+// increment must keep it. These are the same numbers xc_containers() pins, read
+// here so a budget change that moved an unrelated image is caught next to the
+// feature that moved it.
+make bg_preexisting(d: str) -> num {
+  hold names = "fn\nrecursion\nlist_expr\nstrfn\nchr\nstrrec\n"
+  hold want = "8265\n8259\n8252\n8608\n8358\n8433\n"
+  hold pos = 0
+  hold wpos = 0
+  while pos < len(names) {
+    hold start = pos
+    while pos < len(names) && sx_index(names, pos) != 10 { pos = pos + 1 }
+    hold name = gl_slice(names, start, pos)
+    pos = pos + 1
+    hold wstart = wpos
+    while wpos < len(want) && sx_index(want, wpos) != 10 { wpos = wpos + 1 }
+    hold wtext = gl_slice(want, wstart, wpos)
+    wpos = wpos + 1
+    when len(name) > 0 {
+      hold expected = bg_to_int(wtext)
+      hold file = kp_join(d, concat(name, ".pex.elf"))
+      hold c = bg_must_compile(kp_join("selfhost/native32_tests", concat(name, ".sa")), file, "i386", d)
+      hold size = gl_assert_eq_num(bg_size(file), expected, concat(concat("pre-existing i386 image size unchanged: ", name), ""))
+    }
+  }
+  give 0
+}
+
+make bg_to_int(s: str) -> num {
+  hold v = 0
+  hold i = 0
+  while i < len(s) {
+    hold c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+    }
+    i = i + 1
+  }
+  give v
+}
+
+// Byte length of a file, without a host size tool: read it and count.
+make bg_size(file: str) -> num {
+  hold bytes = []
+  give read_bytes(file, bytes)
+}
+
+// The whole gate.
+// The first line of a diagnostic, so a failure message stays one line long.
+make bg_first_line(text: str) -> str {
+  hold e = bg_find_byte(text, 10, 0)
+  when e < 0 {
+    give text
+  }
+  give gl_slice(text, 0, e)
+}
+
+make bg_dispatch() -> num {
+  hold d = "selfhost/seed_tests/sxgates/test-fn-budget"
+  hold cleaned = gl_clean_dir(d)
+  hold created = gl_ensure_dir(d)
+  // The model is a separate Sayanox program; the gate needs it built.
+  when path_kind("./selfhost/budget_model") != 1 {
+    hold e = gl_fail("selfhost/budget_model is not built; run ./sx target native-test first")
+  }
+  hold a = bg_accept(d)
+  hold r = bg_refuse(d)
+  hold nw = bg_no_want_refuses(d)
+  hold e2 = bg_erasure(d)
+  hold p = bg_preexisting(d)
+  show "[ok] @budget: 12 accepted fixtures on three ISAs, 22 refusals, erasure and pre-existing images intact"
+  give 0
+}

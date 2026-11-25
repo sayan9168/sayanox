@@ -304,6 +304,240 @@ make a64_mul(al: num, ah: num, bl: num, bh: num, out: list) -> num {
   give 0
 }
 
+// Full 128-bit product of two 64-bit values, as eight base-2^16 limbs.
+//
+// Column k of the schoolbook sum collects every a_i * b_j with i + j == k. Each
+// term is below 2^32 and at most four terms meet in one column, so a column sum
+// stays below 2^34 and is exact in the C-double backend; the carry out of each
+// limb is recovered by subtracting the kept low half. This is the only place a
+// 128-bit product is formed, so SMULH/UMULH and the RV64 high-half multiplies
+// all read the same bits.
+make a64_mul128(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  hold a0 = bit_and(al, 65535)
+  hold a1 = shr(al, 16)
+  hold a2 = bit_and(ah, 65535)
+  hold a3 = shr(ah, 16)
+  hold b0 = bit_and(bl, 65535)
+  hold b1 = shr(bl, 16)
+  hold b2 = bit_and(bh, 65535)
+  hold b3 = shr(bh, 16)
+  hold c0 = a0 * b0
+  hold c1 = a0 * b1 + a1 * b0
+  hold c2 = a0 * b2 + a1 * b1 + a2 * b0
+  hold c3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0
+  hold c4 = a1 * b3 + a2 * b2 + a3 * b1
+  hold c5 = a2 * b3 + a3 * b2
+  hold c6 = a3 * b3
+  hold s0 = c0
+  hold l0 = bit_and(s0, 65535)
+  hold y1 = (s0 - l0) / 65536
+  hold s1 = c1 + y1
+  hold l1 = bit_and(s1, 65535)
+  hold y2 = (s1 - l1) / 65536
+  hold s2 = c2 + y2
+  hold l2 = bit_and(s2, 65535)
+  hold y3 = (s2 - l2) / 65536
+  hold s3 = c3 + y3
+  hold l3 = bit_and(s3, 65535)
+  hold y4 = (s3 - l3) / 65536
+  hold s4 = c4 + y4
+  hold l4 = bit_and(s4, 65535)
+  hold y5 = (s4 - l4) / 65536
+  hold s5 = c5 + y5
+  hold l5 = bit_and(s5, 65535)
+  hold y6 = (s5 - l5) / 65536
+  hold s6 = c6 + y6
+  hold l6 = bit_and(s6, 65535)
+  hold y7 = (s6 - l6) / 65536
+  out[0] = l0
+  out[1] = l1
+  out[2] = l2
+  out[3] = l3
+  out[4] = l4
+  out[5] = l5
+  out[6] = l6
+  out[7] = y7
+  give 0
+}
+
+// High 64 bits of a 64x64 product where either operand may be signed; `nneg`
+// and `dneg` carry the two sign bits. Writing a = ua - 2^64*nneg and
+// b = ub - 2^64*dneg, the 2^128 term falls outside the window and
+//   hi(a*b) = hi(ua*ub) - nneg*ub - dneg*ua   (mod 2^64).
+// The subtraction happens on whole 64-bit pairs, so no intermediate needs a
+// value above 2^32.
+make a64_mulh(al: num, ah: num, bl: num, bh: num, nneg: num, dneg: num, out: list) -> num {
+  hold p = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold zp = a64_mul128(al, ah, bl, bh, p)
+  hold hl = p[4] + p[5] * 65536
+  hold hh = p[6] + p[7] * 65536
+  hold fix = [0, 0]
+  when nneg == 1 {
+    // fix = ub
+    fix[0] = u32(bl)
+    fix[1] = u32(bh)
+  }
+  when dneg == 1 {
+    // fix = ub - ua, both halves non-negative and below 2^32
+    hold add = fix[0] + u32(al)
+    hold lo = add % 4294967296
+    hold c2 = (add - lo) / 4294967296
+    fix[0] = lo
+    fix[1] = u32(fix[1] + u32(ah) + c2)
+  }
+  hold d = [0, 0]
+  hold zd = a64_sub(hl, hh, fix[0], fix[1], d)
+  out[0] = d[0]
+  out[1] = d[1]
+  give 0
+}
+
+make a64_umulh(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  give a64_mulh(al, ah, bl, bh, 0, 0, out)
+}
+
+make a64_smulh(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  give a64_mulh(al, ah, bl, bh, shr(ah, 31), shr(bh, 31), out)
+}
+
+// 64-bit subtract in the pair domain; out[0]=lo, out[1]=hi (mod 2^64).
+make a64_sub(al: num, ah: num, bl: num, bh: num, out: list) -> num {
+  hold dl = al - bl
+  hold bw = 0
+  when dl < 0 {
+    bw = 1
+  }
+  out[0] = u32(dl)
+  out[1] = u32(ah - bh - bw)
+  give 0
+}
+
+// ---- RV64 M extension: 64-bit multiply, high-half multiply and divide -------
+//
+// Every one of these lives entirely in the (lo, hi) u32 pair domain, the same
+// domain the AArch64 helpers above use, so the C-double host backend never has
+// to hold a value above 2^53.
+
+// 64x64 product as four words: out = [product lo, product hi, high hi, high lo].
+// `kind` is the RV64 funct3: 0 MUL (low 64 bits unsigned), 1 MULH (signed x
+// signed), 2 MULHSU (signed x unsigned), 3 MULHU (unsigned x unsigned). The
+// high-half selection is a64_mulh with the sign bits the RV encoding implies,
+// which is why MULHSU takes only the first operand's sign.
+make rv_m64(al: num, ah: num, bl: num, bh: num, kind: num, out: list) -> num {
+  hold p = [0, 0, 0, 0, 0, 0, 0, 0]
+  hold zp = a64_mul128(al, ah, bl, bh, p)
+  out[0] = p[0] + p[1] * 65536
+  out[1] = p[2] + p[3] * 65536
+  hold nneg = 0
+  when kind == 1 || kind == 2 {
+    nneg = shr(ah, 31)
+  }
+  hold dneg = 0
+  when kind == 1 {
+    dneg = shr(bh, 31)
+  }
+  hold h = [0, 0]
+  hold zh = a64_mulh(al, ah, bl, bh, nneg, dneg, h)
+  // a64_mulh fills h[0] with the low 32 bits of the high half and h[1] with the
+  // high 32 bits, so out[2] / out[3] are lo / hi in that order. These were
+  // swapped, which transposed the two halves of every RV64 high multiply.
+  out[2] = h[0]
+  out[3] = h[1]
+  give 0
+}
+
+// 64-bit DIV / DIVU / REM / REMU. `signd` = 1 selects the signed pair. RV64
+// differs from AArch64 at both special cases, and each is spelled out rather
+// than inherited: a zero divisor answers all ones for a quotient and the
+// dividend for a remainder, and INT64_MIN / -1 answers INT64_MIN for the
+// quotient and zero for the remainder. out = [result lo, result hi].
+make rv_div64(nlo: num, nhi: num, dlo: num, dhi: num, signd: num, want_rem: num, out: list) -> num {
+  when dlo == 0 && dhi == 0 {
+    when want_rem == 1 {
+      out[0] = u32(nlo)
+      out[1] = u32(nhi)
+      give 0
+    }
+    out[0] = 4294967295
+    out[1] = 4294967295
+    give 0
+  }
+  when signd == 0 {
+    hold q = [0, 0, 0, 0]
+    hold zq = a64_div(nlo, nhi, dlo, dhi, q)
+    when want_rem == 1 {
+      out[0] = u32(q[2])
+      out[1] = u32(q[3])
+    } otherwise {
+      out[0] = u32(q[0])
+      out[1] = u32(q[1])
+    }
+    give 0
+  }
+  hold nneg = shr(nhi, 31)
+  hold dneg = shr(dhi, 31)
+  // INT64_MIN / -1: the architectured quotient is INT64_MIN and the remainder 0.
+  when nneg == 1 && dneg == 1 && nlo == 0 && nhi == 2147483648 && dlo == 4294967295 && dhi == 4294967295 {
+    when want_rem == 1 {
+      out[0] = 0
+      out[1] = 0
+    } otherwise {
+      out[0] = 0
+      out[1] = 2147483648
+    }
+    give 0
+  }
+  hold an = [0, 0]
+  hold ad = [0, 0]
+  hold zn = a64_neg4(nlo, nhi, an)
+  when nneg == 0 {
+    an[0] = u32(nlo)
+    an[1] = u32(nhi)
+  }
+  hold zd = a64_neg4(dlo, dhi, ad)
+  when dneg == 0 {
+    ad[0] = u32(dlo)
+    ad[1] = u32(dhi)
+  }
+  hold m = [0, 0, 0, 0]
+  hold zm = a64_div(an[0], an[1], ad[0], ad[1], m)
+  when want_rem == 1 {
+    // The remainder takes the dividend's sign, so it is a magnitude here.
+    hold r = [0, 0]
+    hold zr = a64_neg4(m[2], m[3], r)
+    when nneg == 0 {
+      out[0] = u32(m[2])
+      out[1] = u32(m[3])
+    } otherwise {
+      out[0] = r[0]
+      out[1] = r[1]
+    }
+    give 0
+  }
+  hold q = [0, 0]
+  hold zq2 = a64_neg4(m[0], m[1], q)
+  when nneg == dneg {
+    out[0] = u32(m[0])
+    out[1] = u32(m[1])
+  } otherwise {
+    out[0] = q[0]
+    out[1] = q[1]
+  }
+  give 0
+}
+
+// Two's complement negate of a 64-bit pair; out[0]=lo, out[1]=hi.
+make a64_neg4(lo: num, hi: num, out: list) -> num {
+  hold nl = u32(bit_xor(lo, 4294967295) + 1)
+  hold nh = u32(bit_xor(hi, 4294967295))
+  when nl == 0 {
+    nh = u32(nh + 1)
+  }
+  out[0] = nl
+  out[1] = nh
+  give 0
+}
+
 // 64-bit add of a pair plus (bl,bh); out[0]=lo, out[1]=hi.
 make a64_add(al: num, ah: num, bl: num, bh: num, out: list) -> num {
   hold sl = al + bl
@@ -1355,6 +1589,34 @@ make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_st
         hold z_ai = set_rv_64(rlo, rhi, rd, slo, shi)
         handled = 1
       }
+      // Shift-immediate group (f3 = 1). This was missing entirely, so any
+      // RV64 image that shifted by a constant -- which is how a 64-bit literal
+      // above 2^31 is built without a load -- was refused as an illegal word.
+      // shamt is 6 bits for RV64; SRAI additionally requires bit 30 set and
+      // SRLI requires it clear, and anything else inside the group is
+      // unallocated, so those shapes fall through to the refusal.
+      when f3 == 1 {
+        hold shamt = bit_and(shr(w, 20), 63)
+        hold sh_op = shr(w, 30)
+        when sh_op == 0 && bit_and(shr(w, 26), 15) == 0 {
+          hold so = [0, 0]
+          hold z_shl = a64_shl(xlo, xhi, shamt, so)
+          hold z_slli = set_rv_64(rlo, rhi, rd, so[0], so[1])
+          handled = 1
+        }
+        when sh_op == 1 && bit_and(shr(w, 26), 15) == 0 {
+          hold so = [0, 0]
+          hold z_shr = a64_shr(xlo, xhi, shamt, so)
+          hold z_srli = set_rv_64(rlo, rhi, rd, so[0], so[1])
+          handled = 1
+        }
+        when sh_op == 2 && bit_and(shr(w, 26), 15) == 16 {
+          hold so = [0, 0]
+          hold z_sar = a64_asr(xlo, xhi, shamt, so)
+          hold z_srai = set_rv_64(rlo, rhi, rd, so[0], so[1])
+          handled = 1
+        }
+      }
       when f3 == 2 {
         hold z_slti = set_rv_64(rlo, rhi, rd, slt64(xlo, xhi, ilo, ihi), 0)
         handled = 1
@@ -1386,11 +1648,44 @@ make exec_rv64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_st
       }
     }
     // OP 64 (51)
+    // uint32 product of the low halves of (nl, nh) and (ml, mh); out = [lo, hi].
+    // Four 16x16 partial products, so nothing above 2^32 is held.
     when op == 51 {
       hold a1_lo = rlo[rs1]
       hold a1_hi = rhi[rs1]
       hold a2_lo = rlo[rs2]
       hold a2_hi = rhi[rs2]
+      // M extension, 64-bit forms: MUL / MULH / MULHSU / MULHU. f3 = 4 is
+      // MULW and belongs to opcode 59; f3 = 5..7 are unallocated here, so they
+      // fall through to the illegal-word refusal rather than executing as
+      // something else.
+      when f7 == 1 && f3 <= 3 {
+        hold pp = [0, 0, 0, 0]
+        hold zpp = rv_m64(a1_lo, a1_hi, a2_lo, a2_hi, f3, pp)
+        when f3 == 0 {
+          hold z_lo = set_rv_64(rlo, rhi, rd, pp[0], pp[1])
+        } otherwise {
+          hold z_hi = set_rv_64(rlo, rhi, rd, pp[2], pp[3])
+        }
+        handled = 1
+      }
+      // M extension, 64-bit divide and remainder: DIV / DIVU / REM / REMU.
+      // These were absent entirely, so a 64-bit divide word was refused rather
+      // than answered; RV64 semantics differ from AArch64's at a zero divisor
+      // and at INT64_MIN / -1, so rv_div64 owns those two cases.
+      when f7 == 1 && f3 >= 4 {
+        // f3 = 4 DIV (signed quotient), 5 DIVU, 6 REM, 7 REMU. The funct3 bit 0
+        // selects the *unsigned* form, so it is inverted here; reading it
+        // directly made DIVU and REMU behave as their signed counterparts, which
+        // agrees with the signed words and disagrees with every operand that has
+        // bit 63 set.
+        hold signd = 1 - f3 % 2
+        hold want_rem = (f3 - f3 % 2) / 2 - 2
+        hold pp = [0, 0]
+        hold zpp = rv_div64(a1_lo, a1_hi, a2_lo, a2_hi, signd, want_rem, pp)
+        hold z_r = set_rv_64(rlo, rhi, rd, pp[0], pp[1])
+        handled = 1
+      }
       when f7 == 0 && f3 == 0 {
         hold r_lo = a1_lo + a2_lo
         hold r_cy = 0
@@ -1896,17 +2191,71 @@ make exec_arm64(img_mem: list, stk_mem: list, page_perm: list, entry: num, max_s
       handled = 1
     }
 
-    // 5. Data-Processing 3-Source: MADD / MSUB and the wide SMADDL / UMADDL /
-    // SMSUBL / UMSUBL forms (bit 21 = L picks the 32x32 -> 64 pair, bit 23 = U
-    // picks unsigned). MADD/MSUB used to be evaluated with 32-bit arithmetic in
-    // both widths, and umaddl fell into the MSUB path; both are fixed here.
+    // 5. Data-Processing 3-Source: MADD / MSUB, the wide SMADDL / UMADDL /
+    // SMSUBL / UMSUBL forms, and SMULH / UMULH.
+    //
+    // The group is sf, 00, 11011, op31, Rm, o0, Ra, Rn, Rd with op31 at bits
+    // 23:21 and o0 = bit 15. The architectural decode is:
+    //   op31 = 000                MADD  / MSUB   (o0 picks the addend's sign)
+    //   op31 = 001 + sf = 1       SMADDL / SMSUBL
+    //   op31 = 101 + sf = 1       UMADDL / UMSUBL
+    //   op31 = 010 + Ra = 11111   SMULH
+    //   op31 = 110 + Ra = 11111   UMULH
+    //   op31 = 011, 100, 111      unallocated
+    //
+    // Bit 22 is therefore the whole discriminator between the add-with-product
+    // forms and the multiply-high forms: it is clear for 000/001/101 and set for
+    // 010/011/110/111. This block previously tested bit 23 instead, so
+    //   * UMULH (op31 = 110) was refused as "unallocated 3-source encoding", and
+    //   * SMULH (op31 = 010) fell through to the SMADDL path, which answers bits
+    //     63:0 of the 128-bit product where the architecture asks for bits
+    //     127:64. That is a silently wrong answer, and it is what makes this a
+    //     correctness change rather than a refusal change.
+    // Named registers stay out of it: Ra = 11111 is xzr for MADD/SMADDL/
+    // UMADDL, so `madd x10, x24, x25, xzr` keeps its old answer here.
     when handled == 0 && mid5 == 27 {
       hold o0_m = bit_and(shr(w, 15), 1)
       hold ra_m = bit_and(shr(w, 10), 31)
       hold l_m = bit_and(shr(w, 21), 1)
       hold u_m = bit_and(shr(w, 23), 1)
-      when l_m == 0 && u_m == 1 {
+      hold hi_m = bit_and(shr(w, 22), 1)
+      // op31 = 010 / 110 with Ra = 11111: the multiply-high pair, sf = 1 only.
+      when handled == 0 && hi_m == 1 && l_m == 0 && o0_m == 0 && ra_m == 31 && sf == 1 {
+        hold vn = 0
+        hold vh = 0
+        when rn < 31 {
+          vn = rlo[rn]
+          vh = rhi[rn]
+        }
+        hold vm = 0
+        hold vmh = 0
+        when rm < 31 {
+          vm = rlo[rm]
+          vmh = rhi[rm]
+        }
+        // u_m = 0 is SMULH and u_m = 1 is UMULH. The unsigned high half is the
+        // base for both; the signed answer is that minus the magnitude of
+        // whichever operand is negative, computed by a64_mulh from the two sign
+        // bits so a negative x negative row lands back on the unsigned answer.
+        hold sgn = 1 - u_m
+        hold nneg = sgn * shr(vh, 31)
+        hold dneg = sgn * shr(vmh, 31)
+        hold hi = [0, 0]
+        hold zhi = a64_mulh(vn, vh, vm, vmh, nneg, dneg, hi)
+        hold zmh = set_arm_x(rlo, rhi, rd, hi[0], hi[1])
+        handled = 1
+      }
+      // Remaining unallocated shapes, spelled out so none of them can slip into
+      // the MADD path and answer something:
+      //   op31 = 011, 111        bit 22 set, but neither 010 nor 110
+      //   op31 = 100             bit 22 clear, bit 23 set, bit 21 clear
+      // op31 = 101 is UMADDL / UMSUBL and must keep working, which is why the
+      // third test checks bit 21 as well as bits 23:22.
+      when handled == 0 && hi_m == 1 {
         hold f3s = fail_isa(1, concat("AArch64 unallocated 3-source encoding ", istr(w)))
+      }
+      when handled == 0 && l_m == 0 && u_m == 1 {
+        hold f3u = fail_isa(1, concat("AArch64 unallocated 3-source encoding ", istr(w)))
       }
       when l_m == 1 && sf == 0 {
         hold f3w = fail_isa(1, "AArch64 wide multiply with a 32-bit destination is unallocated")

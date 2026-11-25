@@ -1,0 +1,8 @@
+@budget(frames: 8)
+make r(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give r(n - 1)
+}
+show r(2)

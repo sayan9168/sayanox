@@ -1,0 +1,15 @@
+// BUDGET.md §4: an empty-origin growing list costs its latent capacity, 16,
+// however many pushes are written -- not the five actually here. §3 makes its
+// locals cost 17 (those 16 words plus the list's own name slot), and the loop
+// counter adds one more, so 18.
+@budget(locals: 18, lists: 16)
+make grow() -> num {
+  hold xs = []
+  hold i = 0
+  while i < 5 {
+    xs = push(xs, i)
+    i = i + 1
+  }
+  give xs[4]
+}
+show grow()

@@ -1,0 +1,7 @@
+// BUDGET.md §4 exact fit: a sixteen-element literal against lists: 16.
+@budget(locals: 16, lists: 16)
+make sixteen() -> num {
+  hold xs = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]
+  give xs[0] + xs[15]
+}
+show sixteen()

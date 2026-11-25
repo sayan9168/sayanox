@@ -1,0 +1,36 @@
+// BUDGET.md §3: thirty strings is exactly sixty words.
+@budget(locals: 60)
+make wide() -> str {
+  hold s1 = "x"
+  hold s2 = "x"
+  hold s3 = "x"
+  hold s4 = "x"
+  hold s5 = "x"
+  hold s6 = "x"
+  hold s7 = "x"
+  hold s8 = "x"
+  hold s9 = "x"
+  hold s10 = "x"
+  hold s11 = "x"
+  hold s12 = "x"
+  hold s13 = "x"
+  hold s14 = "x"
+  hold s15 = "x"
+  hold s16 = "x"
+  hold s17 = "x"
+  hold s18 = "x"
+  hold s19 = "x"
+  hold s20 = "x"
+  hold s21 = "x"
+  hold s22 = "x"
+  hold s23 = "x"
+  hold s24 = "x"
+  hold s25 = "x"
+  hold s26 = "x"
+  hold s27 = "x"
+  hold s28 = "x"
+  hold s29 = "x"
+  hold s30 = "x"
+  give s1
+}
+show wide()

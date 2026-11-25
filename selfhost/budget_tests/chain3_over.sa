@@ -1,0 +1,12 @@
+// BUDGET.md §5: depth 3 against frames: 2. Expected to FAIL.
+@budget(frames: 2)
+make c1() -> num {
+  give c2() + 1
+}
+make c2() -> num {
+  give c3() + 1
+}
+make c3() -> num {
+  give 3
+}
+show c1()

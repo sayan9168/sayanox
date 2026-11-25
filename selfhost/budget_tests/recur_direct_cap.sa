@@ -1,0 +1,10 @@
+// BUDGET.md §5: direct recursion means reachable depth is the 64-frame cap, so
+// frames: 64 is the only legal declaration.
+@budget(frames: 64)
+make down(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give down(n - 1)
+}
+show down(4)

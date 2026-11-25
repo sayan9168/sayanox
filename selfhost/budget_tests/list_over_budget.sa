@@ -1,0 +1,8 @@
+// BUDGET.md §4: three elements against lists: 2 -- under the hard cap, so this
+// is the cost comparison, not the cap. Expected to FAIL.
+@budget(lists: 2)
+make three() -> num {
+  hold xs = [7,8,9]
+  give xs[0] + xs[2]
+}
+show three()

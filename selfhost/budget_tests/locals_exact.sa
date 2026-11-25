@@ -1,0 +1,10 @@
+// BUDGET.md §3 exact fit: four `num` locals cost four words, declared as four.
+@budget(locals: 4)
+make quad() -> num {
+  hold a = 1
+  hold b = 2
+  hold c = 3
+  hold d = 4
+  give a + b + c + d
+}
+show quad()
