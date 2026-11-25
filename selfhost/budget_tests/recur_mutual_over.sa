@@ -1,0 +1,15 @@
+// BUDGET.md §5: mutual recursion with frames: 10. Expected to FAIL.
+@budget(frames: 10)
+make even(n: num) -> num {
+  when n == 0 {
+    give 1
+  }
+  give odd(n - 1)
+}
+make odd(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give even(n - 1)
+}
+show even(4)

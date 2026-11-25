@@ -1,0 +1,9 @@
+// BUDGET.md §5: an acyclic chain of depth 2.
+@budget(frames: 2)
+make c1() -> num {
+  give c2() + 1
+}
+make c2() -> num {
+  give 2
+}
+show c1()

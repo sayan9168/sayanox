@@ -1,0 +1,5 @@
+@budget(stack: 8)
+make f() -> num {
+  give 1
+}
+show f()

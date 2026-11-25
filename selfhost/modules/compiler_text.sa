@@ -266,6 +266,12 @@ make sxadv_has_any(text: str) -> num {
         when c == 124 && i + 1 < n && sx_index(text, i + 1) == 62 {
           give 1
         }
+        // `@budget(...)` on the line before a `make` is erased before parsing.
+        // Noticing it here keeps every unannotated program on the zero-alloc
+        // path: sxadv_has_any still returns 0 for text that has no annotation.
+        when c == 64 && i + 7 <= n && sxadv_word_is(text, i + 1, i + 7, "budget") == 1 {
+          give 1
+        }
         when sxadv_id0(c) == 1 {
           hold w0 = i
           while i < n && sxadv_id(sx_index(text, i)) == 1 {
@@ -2025,14 +2031,94 @@ make sxadv_top_holds(text: str) -> str {
   give csv
 }
 
+// Append text[a, b) to `out` in bounded chunks. The concat builtin refuses very
+// deep nesting and long literal spans, and a source file is unbounded, so the
+// copy is chunked rather than written as one expression.
+make sxadv_copy_span(out: str, text: str, a: num, b: num) -> str {
+  hold acc = out
+  hold i = a
+  while i < b {
+    hold start = i
+    hold limit = i + 128
+    when limit > b {
+      limit = b
+    }
+    hold piece = ""
+    while i < limit {
+      piece = concat(piece, chr(sx_index(text, i)))
+      i = i + 1
+    }
+    acc = concat(acc, piece)
+  }
+  give acc
+}
+
+// Erase `@budget(...)` lines before anything is parsed. The annotation is a
+// declaration-time claim about the emitter's own accounting (docs/BUDGET.md),
+// checked by native32 where frames and locals are actually assigned; the C lanes
+// can express no program that the annotation would change, so here it is only
+// removed. Keeping this in the shared text module is what makes erasure
+// byte-identical on every C lane: the parsers never see the line at all.
+make sxadv_strip_budget(text: str) -> str {
+  hold n = len(text)
+  hold out = ""
+  hold i = 0
+  hold copystart = 0
+  while i < n {
+    // Only treat a line as an annotation when `@budget` starts it, so a mention
+    // inside a string or comment cannot delete code.
+    hold atline = 0
+    when sx_index(text, i) == 64 && i + 7 <= n && sxadv_word_is(text, i + 1, i + 7, "budget") == 1 {
+      atline = 1
+    }
+    when atline == 0 {
+      i = i + 1
+    } otherwise {
+      // Drop the whole line, including its newline. Text before it is copied
+      // once, when the first annotation is found.
+      hold linestart = i
+      hold stop = i
+      while stop < n && sx_index(text, stop) != 10 {
+        stop = stop + 1
+      }
+      hold next = stop
+      when next < n {
+        next = next + 1
+      }
+      when linestart > copystart {
+        out = sxadv_copy_span(out, text, copystart, linestart)
+      }
+      i = next
+      copystart = next
+    }
+  }
+  when copystart == 0 {
+    give text
+  }
+  when n > copystart {
+    out = sxadv_copy_span(out, text, copystart, n)
+  }
+  give out
+}
+
 make sxadvance_lower(text: str, priv: str, state: list) -> str {
   when sxadv_has_any(text) == 0 {
     give text
   }
+  // Erased first: a @budget line that survived into the parser would be a syntax
+  // error, and the annotation must be invisible to everything below.
+  hold plain = sxadv_strip_budget(text)
+  // A program that carried only @budget annotations has nothing left to lower,
+  // and must not be reported as using any advanced construct: the runtime
+  // support those constructs pull in would make the annotation visible in the
+  // generated C. Erasure has to reach the runtime, not just the parser.
+  when sxadv_has_any(plain) == 0 {
+    give plain
+  }
   push(state, 1)
-  hold th = sxadv_top_holds(text)
+  hold th = sxadv_top_holds(plain)
   hold ctx = "|known=|in_loop=0|trial_rw=|lact=|conv_flag=|conv_var=|conv_prev=|"
   hold ctx = sxadv_ctx_put(ctx, "top_holds", th)
-  give sxadv_block(text, 0, len(text), priv, state, ctx)
+  give sxadv_block(plain, 0, len(plain), priv, state, ctx)
 }
 

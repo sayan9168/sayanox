@@ -1,0 +1,3 @@
+@budget(locals: 4)
+hold x = 1
+show x

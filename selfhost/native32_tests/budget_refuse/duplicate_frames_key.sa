@@ -1,0 +1,5 @@
+@budget(frames: 2, frames: 4)
+make f() -> num {
+  give 1
+}
+show f()

@@ -1,0 +1,5 @@
+@budget(locals: 4, locals: 8)
+make f() -> num {
+  give 1
+}
+show f()

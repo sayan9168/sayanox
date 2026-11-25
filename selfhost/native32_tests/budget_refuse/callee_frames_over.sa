@@ -1,0 +1,12 @@
+// BUDGET.md §6: the caller's own locals fit and the callee's do too, but the
+// caller's frames budget of 1 cannot cover the frame the call adds.
+// Expected to FAIL.
+@budget(frames: 1, locals: 2)
+make caller() -> num {
+  hold a = 1
+  give deep() + a
+}
+make deep() -> num {
+  give 2
+}
+show caller()

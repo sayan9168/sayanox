@@ -1258,6 +1258,16 @@ hold vstr = verify_six_way(dir, "strings", "selfhost/native32_tests/strings.sa",
 hold vlit = verify_six_way(dir, "len_literals", "selfhost/native32_tests/len_literals_common.sa", "", "")
 hold vlit_oracle = assert_files_eq("selfhost/native32_tests/len_literals.want", concat(dir, "/len_literals.seed.out"), "literal len independent byte-length oracle")
 hold vlit_forms = verify_native_literal_forms(dir)
+// The @budget fixtures: an erased annotation must not change a single byte of
+// any lane's image, so these run through the same six-way path as everything
+// else. A budget implementation that leaked one word into a frame would show up
+// here as an arm64/riscv64 golden mismatch, not as a budget diagnostic.
+hold vbg1 = verify_six_way(dir, "bg_locals_exact", "selfhost/budget_tests/locals_exact.sa", "selfhost/native32_tests/golden/locals_exact.arm64.elf", "selfhost/native32_tests/golden/locals_exact.riscv64.elf")
+hold vbg2 = verify_six_way(dir, "bg_chain3", "selfhost/budget_tests/chain3.sa", "selfhost/native32_tests/golden/chain3.arm64.elf", "selfhost/native32_tests/golden/chain3.riscv64.elf")
+hold vbg3 = verify_six_way(dir, "bg_list_grow", "selfhost/budget_tests/list_grow_fixed.sa", "selfhost/native32_tests/golden/list_grow_fixed.arm64.elf", "selfhost/native32_tests/golden/list_grow_fixed.riscv64.elf")
+hold vbg4 = verify_six_way(dir, "bg_strings", "selfhost/budget_tests/strings_sixty.sa", "selfhost/native32_tests/golden/strings_sixty.arm64.elf", "selfhost/native32_tests/golden/strings_sixty.riscv64.elf")
+hold vbg5 = verify_six_way(dir, "bg_plain", "selfhost/budget_tests/plain.sa", "selfhost/native32_tests/golden/plain.arm64.elf", "selfhost/native32_tests/golden/plain.riscv64.elf")
+hold vbg6 = verify_six_way(dir, "bg_plain_twin", "selfhost/budget_tests/plain_twin.sa", "selfhost/native32_tests/golden/plain_twin.arm64.elf", "selfhost/native32_tests/golden/plain_twin.riscv64.elf")
 hold vlist_strings = verify_native_only_list(dir, "list_call_strings")
 hold vlist_extra = verify_native_only_list(dir, "list_index_extra")
 hold vlist_negative = verify_native_only_list(dir, "list_index_negative")

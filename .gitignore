@@ -15,6 +15,7 @@ selfhost/boot2.c
 selfhost/boot_from_gen2
 selfhost/boot_from_gen2.c
 selfhost/native_aot
+selfhost/budget_model
 selfhost/seed/sxc_seed
 selfhost/seed/sxc_seed_min
 selfhost/seed_tests/

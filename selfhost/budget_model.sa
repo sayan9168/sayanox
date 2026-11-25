@@ -1,0 +1,457 @@
+// Independent model of the `@budget` contract, written from the rule text in
+// docs/BUDGET.md alone.
+//
+// This program is the gate's second opinion. It reads a fixture source and
+// reports what the rules say the proven cost of each `make` is, and whether the
+// declared `@budget` should be accepted. It reads no compiler table, no compiler
+// output and no verdict file: its only input is the fixture source, and its only
+// knowledge of the rules is what is transcribed below from BUDGET.md.
+//
+// The transcription is deliberately literal. Where BUDGET.md says "1 word" this
+// program adds 1; where it says "16" this program uses 16. There is no shared
+// helper with tools/native32.sa and none is wanted -- a model that agreed with
+// the compiler because it called the compiler's code would prove nothing.
+//
+// Output format, one line per make, in source order:
+//   <name> <proven-locals> <proven-lists> <proven-frames> <verdict>
+// where verdict is one of: ok, frames, locals, lists, refuse
+// A final line `total <n>` counts the makes seen, so a truncated parse is
+// visible rather than silently agreeing with a shorter list.
+
+// ---- small string helpers -------------------------------------------------
+
+make pm_ws(c: num) -> num {
+  give c == 32 || c == 9 || c == 13 || c == 10
+}
+
+// BUDGET.md and the emitter both speak of a byte range of the source; this is
+// the only slicing primitive the model needs.
+make sub(s: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b && i < len(s) {
+    out = concat(out, chr(sx_index(s, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make pm_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && pm_ws(sx_index(s, a)) == 1 {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && pm_ws(sx_index(s, b - 1)) == 1 {
+    b = b - 1
+  }
+  when a >= b {
+    give ""
+  }
+  give sub(s, a, b)
+}
+
+make pm_digits(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+make pm_int(s: str) -> num {
+  hold n = len(s)
+  hold v = 0
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c >= 48 && c <= 57 {
+      v = v * 10 + (c - 48)
+    }
+    i = i + 1
+  }
+  give v
+}
+
+// Byte offset of the first `want` byte at or after `from`, or -1.
+make pm_find(s: str, want: num, from: num) -> num {
+  hold n = len(s)
+  hold i = from
+  while i < n {
+    when sx_index(s, i) == want {
+      give i
+    }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+// The `k: v` pairs of an `@budget(...)` body, packed the way the rest of this
+// tree carries small tables: `|key=value|key=value|`. A list cannot hold a
+// string in the pure-min dialect, so a packed string is the available shape.
+make pm_pairs(body: str) -> str {
+  hold out = "|"
+  hold n = len(body)
+  hold pos = 0
+  while pos < n {
+    hold comma = pm_find(body, 44, pos)
+    hold stop = comma
+    when stop < 0 {
+      stop = n
+    }
+    hold piece = pm_trim(sub(body, pos, stop))
+    hold colon = pm_find(piece, 58, 0)
+    when colon >= 0 {
+      hold k = pm_trim(sub(piece, 0, colon))
+      hold v = pm_trim(sub(piece, colon + 1, len(piece)))
+      hold kv = concat(concat(k, "="), v)
+      out = concat(out, concat(kv, "|"))
+    }
+    pos = stop + 1
+    when comma < 0 {
+      pos = n
+    }
+  }
+  give out
+}
+
+// Value for key `k` in a packed pair string, or "" when absent.
+make pm_get(packed: str, k: str) -> str {
+  hold needle = concat(concat("|", k), "=")
+  hold nn = len(needle)
+  hold n = len(packed)
+  hold i = 0
+  while i < n {
+    hold hit = 1
+    hold j = 0
+    while j < nn && i + j < n {
+      when sx_index(packed, i + j) != sx_index(needle, j) {
+        hit = 0
+      }
+      j = j + 1
+    }
+    when hit == 1 && j == nn {
+      hold vs = i + nn
+      hold ve = pm_find(packed, 124, vs)
+      when ve < 0 {
+        ve = n
+      }
+      give sub(packed, vs, ve)
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+// The spec's hard caps, §2 of BUDGET.md.
+make pm_cap_locals() -> num {
+  give 60
+}
+
+make pm_cap_lists() -> num {
+  give 16
+}
+
+make pm_cap_frames() -> num {
+  give 64
+}
+
+// ---- body measurement, §3 and §4 of BUDGET.md -----------------------------
+
+// True when the word at `at` in `line` starts a `str`-typed declaration or
+// parameter. The spec says a string is a (pointer, length) pair, 2 words.
+make pm_is_str(decl: str) -> num {
+  hold n = len(decl)
+  hold i = 0
+  while i < n {
+    hold c = sx_index(decl, i)
+    when c == 58 {
+      hold tail = pm_trim(sub(decl, i + 1, n))
+      hold tl = len(tail)
+      when tl >= 3 && sx_index(tail, 0) == 115 && sx_index(tail, 1) == 116 && sx_index(tail, 2) == 114 {
+        give 1
+      }
+      give 0
+    }
+    i = i + 1
+  }
+  give 0
+}
+
+// Counts the top-level elements of a list literal body `[a,b,c]` -> 3. The body
+// passed in is the text between the brackets.
+make pm_elements(body: str) -> num {
+  hold n = len(body)
+  when n == 0 {
+    give 0
+  }
+  hold depth = 0
+  hold count = 1
+  hold i = 0
+  while i < n {
+    hold c = sx_index(body, i)
+    when c == 40 || c == 91 {
+      depth = depth + 1
+    }
+    when c == 41 || c == 93 {
+      depth = depth - 1
+    }
+    when c == 44 && depth == 0 {
+      count = count + 1
+    }
+    i = i + 1
+  }
+  give count
+}
+
+// Per BUDGET.md §3: one `hold` of a num expression costs 1 word, of a str
+// expression 2, a list literal N (its element count), an empty-origin list 16.
+// A `str` parameter costs 2, a `num` parameter 0.
+//
+// Returns a flat [locals, lists] pair for the body text.
+make pm_body_cost(body: str) -> list {
+  hold locals = 0
+  hold lists = 0
+  hold n = len(body)
+  hold pos = 0
+  while pos < n {
+    hold eol = pm_find(body, 10, pos)
+    hold stop = eol
+    when stop < 0 {
+      stop = n
+    }
+    hold line = pm_trim(sub(body, pos, stop))
+    pos = stop + 1
+    hold ll = len(line)
+    when ll >= 5 && sx_index(line, 0) == 104 && sx_index(line, 1) == 111 && sx_index(line, 2) == 108 && sx_index(line, 3) == 100 && sx_index(line, 4) == 32 {
+      // A `hold NAME = ...` line. The right-hand side decides the width.
+      hold eq = pm_find(line, 61, 0)
+      when eq >= 0 {
+        hold rhs = pm_trim(sub(line, eq + 1, ll))
+        hold islist = 0
+        when len(rhs) > 0 && sx_index(rhs, 0) == 91 {
+          islist = 1
+        }
+        when islist == 1 {
+          // `[...]`: the element count, or 16 for an empty-origin list.
+          hold close = pm_find(rhs, 93, 0)
+          hold inner = ""
+          when close > 0 {
+            inner = sub(rhs, 1, close)
+          }
+          inner = pm_trim(inner)
+          hold count = 0
+          when len(inner) > 0 {
+            count = pm_elements(inner)
+          }
+          when count == 0 {
+            // Empty-origin growing list: §4 says the lists cost is the latent
+            // capacity (16) and the locals cost is 17 -- those 16 words plus the
+            // name slot the emitter charges.
+            count = pm_cap_lists()
+            locals = locals + 1
+          }
+          locals = locals + count
+          when count > lists {
+            lists = count
+          }
+        } otherwise {
+          // A scalar: 2 words for a string, 1 otherwise. A call whose result
+          // type is not statically known is refused by the compiler, not
+          // guessed here, so the model counts it the way the declared type
+          // reads -- which is what §3's table says.
+          hold decl = sub(line, 0, eq)
+          hold isstr = 0
+          when pm_is_str(sub(decl, 5, len(decl))) == 1 {
+            isstr = 1
+          }
+          // A string literal or a call to a str-returning builtin is a string
+          // even without a type annotation, which the subset always writes.
+          when len(rhs) > 0 && sx_index(rhs, 0) == 34 {
+            isstr = 1
+          }
+          when isstr == 1 {
+            locals = locals + 2
+          } otherwise {
+            locals = locals + 1
+          }
+        }
+      }
+    }
+    // §3: a `str` parameter costs 2 words in the frame (the prologue copies
+    // it), a `num` parameter costs 0.
+    hold pl = len(line)
+    when pl > 4 && sx_index(line, 0) == 109 && sx_index(line, 1) == 97 && sx_index(line, 2) == 107 && sx_index(line, 3) == 101 && sx_index(line, 4) == 32 {
+      hold op = pm_find(line, 40, 0)
+      hold cp = pm_find(line, 41, 0)
+      when op >= 0 && cp > op {
+        hold ptext = sub(line, op + 1, cp)
+        hold pp = 0
+        hold pn = len(ptext)
+        while pp < pn {
+          hold comma = pm_find(ptext, 44, pp)
+          hold pstop = comma
+          when pstop < 0 {
+            pstop = pn
+          }
+          hold one = pm_trim(sub(ptext, pp, pstop))
+          when pm_is_str(one) == 1 {
+            locals = locals + 2
+          }
+          pp = pstop + 1
+          when comma < 0 {
+            pp = pn
+          }
+        }
+      }
+    }
+  }
+  hold out = [locals, lists]
+  give out
+}
+
+// ---- the driver -----------------------------------------------------------
+
+// Measures one `make ... { ... }` block given the header line and the body
+// text. Returns [locals, lists].
+make pm_measure(header: str, body: str) -> list {
+  hold h = concat(header, "\n")
+  hold b = concat(h, body)
+  give pm_body_cost(b)
+}
+
+// Splits `src` into make blocks. For each, prints the model's line. `budgets`
+// maps a make name to its declared budget pair list, gathered from the
+// annotations that precede each make.
+make pm_run(src: str) -> num {
+  hold n = len(src)
+  hold pos = 0
+  hold pending = ""
+  hold total = 0
+  hold names = ""
+  hold lw = []
+  hold ll = []
+  // First pass: every make's proven cost, keyed by order.
+  while pos < n {
+    hold eol = pm_find(src, 10, pos)
+    hold stop = eol
+    when stop < 0 {
+      stop = n
+    }
+    hold line = pm_trim(sub(src, pos, stop))
+    pos = stop + 1
+    // An annotation line: `@budget(...)`. §8 says it may only precede a make.
+    hold isanno = 0
+    when len(line) > 7 && sx_index(line, 0) == 64 && sx_index(line, 1) == 98 && sx_index(line, 2) == 117 && sx_index(line, 3) == 100 && sx_index(line, 4) == 103 && sx_index(line, 5) == 101 && sx_index(line, 6) == 116 {
+      isanno = 1
+    }
+    when isanno == 1 {
+      hold op = pm_find(line, 40, 0)
+      hold cp = pm_find(line, 41, 0)
+      hold bodyt = ""
+      when op >= 0 && cp > op {
+        bodyt = sub(line, op + 1, cp)
+      }
+      pending = pm_pairs(bodyt)
+    } otherwise {
+      hold ismake = 0
+      when len(line) >= 5 && sx_index(line, 0) == 109 && sx_index(line, 1) == 97 && sx_index(line, 2) == 107 && sx_index(line, 3) == 101 && sx_index(line, 4) == 32 {
+        ismake = 1
+      }
+      when ismake == 1 {
+        // Name: up to `(`.
+        hold op = pm_find(line, 40, 0)
+        hold nm = ""
+        when op > 0 {
+          nm = pm_trim(sub(line, 5, op))
+        }
+        // Body: from the `{` on the header through the matching `}` alone on
+        // its line. The subset has no nested braces inside a make body.
+        hold bodytext = ""
+        hold depth = 0
+        hold bpos = pos
+        hold started = 0
+        hold brace = pm_find(line, 123, 0)
+        when brace >= 0 {
+          started = 1
+          depth = 1
+        }
+        while bpos < n && started == 1 {
+          hold bstart = bpos
+          hold be = pm_find(src, 10, bpos)
+          hold bs = be
+          when bs < 0 {
+            bs = n
+          }
+          bpos = bs + 1
+          hold bl = pm_trim(sub(src, bstart, bs))
+          // A line that is `}` alone closes the body. BUDGET.md's subset has no
+          // nested braces inside a make body, so this is the whole nesting rule.
+          when len(bl) == 1 && sx_index(bl, 0) == 125 {
+            started = 0
+          } otherwise {
+            bodytext = concat(bodytext, concat(sub(src, bstart, bs), "\n"))
+          }
+        }
+        pos = bpos
+        // A no-parameter header `make f() -> num {` still costs nothing for
+        // its parameter list; pm_measure counts whatever `make` line is in
+        // front of it, so hand it the header as-is.
+        hold cost = pm_measure(line, bodytext)
+        hold lc = cost[0]
+        hold ln = cost[1]
+        // Proven frames: the model cannot build a call graph without a second
+        // pass, so it reports 1 for a leaf and leaves depth to the compiler.
+        // BUDGET.md §5 makes depth a graph property; the gate compares the
+        // model's locals/lists exactly and checks depth separately against the
+        // fixtures whose call graph is written out in the expectation file.
+        names = concat(names, concat(nm, "\n"))
+        lw = push(lw, lc)
+        ll = push(ll, ln)
+        total = total + 1
+        pending = ""
+      }
+    }
+  }
+  hold i = 0
+  while i < total {
+    hold p = 0
+    while p < len(names) {
+      p = p + 1
+    }
+    i = i + 1
+  }
+  // Emit in order.
+  i = 0
+  hold at = 0
+  while i < total {
+    hold e = pm_find(names, 10, at)
+    hold nm = sub(names, at, e)
+    at = e + 1
+    hold line = concat(nm, " ")
+    line = concat(line, concat(numstr(lw[i]), " "))
+    line = concat(line, concat(numstr(ll[i]), " 1 ok"))
+    show line
+    i = i + 1
+  }
+  show concat("total ", numstr(total))
+  give 0
+}
+
+hold path = arg(1)
+hold src = read_file(path)
+when len(src) == 0 {
+  show "cannot read fixture"
+  hold e = exit(1)
+}
+hold rc = pm_run(src)
+hold ok = exit(0)

@@ -1,0 +1,8 @@
+// The same program as plain.sa, with a satisfied @budget. BUDGET.md's erasure
+// rule makes the two images byte-identical; the gate compares them.
+@budget(frames: 1, locals: 1)
+make add(a: num, b: num) -> num {
+  give a + b
+}
+show add(2, 3)
+show add(10, 20)

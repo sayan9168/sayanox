@@ -1,0 +1,7 @@
+@budget(frames: 64, locals: 4, lists: 16)
+make isr_step(x: num) -> num {
+  hold a = x
+  hold b = a + 1
+  give b
+}
+show isr_step(1)

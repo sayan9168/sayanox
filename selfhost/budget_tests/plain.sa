@@ -1,0 +1,7 @@
+// A program with no @budget at all: BUDGET.md §1 makes the annotation optional,
+// and §conformance requires it to be byte-identical to an annotated twin.
+make add(a: num, b: num) -> num {
+  give a + b
+}
+show add(2, 3)
+show add(10, 20)

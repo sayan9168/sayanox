@@ -1,0 +1,14 @@
+@budget(frames: 12)
+make e(n: num) -> num {
+  when n == 0 {
+    give 1
+  }
+  give o(n - 1)
+}
+make o(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give e(n - 1)
+}
+show e(2)

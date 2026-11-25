@@ -1,0 +1,6 @@
+// BUDGET.md §5: a leaf reaches one frame.
+@budget(frames: 1)
+make c1() -> num {
+  give 1
+}
+show c1()

@@ -1,0 +1,7 @@
+@budget(locals: 1)
+make f() -> num {
+  hold a = 1
+  hold b = 2
+  give a + b
+}
+show f()

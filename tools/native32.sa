@@ -639,15 +639,31 @@ hold fp_slot = 0 - 1
 // depth-check branch is patched once the shared overflow stub exists.
 hold fill_site = 0 - 1
 hold ov_sites = []
+// ---- @budget (docs/BUDGET.md) -------------------------------------------
+// The annotation is erased before the declaration walk and its three values are
+// recorded per function, in source order, as a packed "|frames|locals|lists|"
+// triple so the whole feature costs two globals rather than five. -1 means "not
+// declared" and is what a function without an annotation contributes; the
+// erasure rule then makes the rest of the pipeline unable to see the difference.
+// bg_decl[fi*3 + k] is frames, locals or lists for function fi.
+hold bg_decl = []
+// Per-list capacities, so the `lists` budget can compare against what the
+// emitter actually reserved: one (function, capacity) pair per list declared.
+hold fn_listcap = []
+hold fn_listcap_fn = []
+// Caller of each call_patch entry, parallel to its (site, callee) pairs. The
+// emitter's pairs stay untouched -- they are patched in place -- so the caller
+// is carried here instead.
+hold bg_caller = []
 hold ov_stub_at = 0 - 1
 hold ov_stub_skip = 0 - 1
 
 // Position of the first occurrence of a byte value, or -1.
-make find_byte(s: str, code: num) -> num {
+make find_byte(s: str, want: num) -> num {
   hold n = len(s)
   hold i = 0
   while i < n {
-    when sx_index(s, i) == code { give i }
+    when sx_index(s, i) == want { give i }
     i = i + 1
   }
   give 0 - 1
@@ -1476,6 +1492,7 @@ make emit_call_tokens(toks: str, openat: num, close: num, fi: num, nm: str, sour
   hold cdisp = emit_call_here(arch)
   call_patch = push(call_patch, cdisp)
   call_patch = push(call_patch, fi)
+  bg_caller = push(bg_caller, fn_active)
   hold popped = 0
   while popped < pushed {
     when arch == 0 {
@@ -1537,6 +1554,457 @@ make try_user_call(extext: str) -> num {
 
 // Lift every `make` body out of the program text. The body text is stored per
 // function and the header and body lines are blanked in the returned text, so
+// ---- @budget: recognition, validation and erasure -------------------------
+// See docs/BUDGET.md. The annotation is recognised and stripped here, before
+// lift_functions() walks the declarations, so nothing downstream can see it:
+// the emitter, the C lanes and the IR lane are handed text without the line and
+// therefore cannot emit a byte for it. bg_seen holds one "|frames|locals|lists|"
+// triple per make, in declaration order.
+make bg_ws(c: num) -> num {
+  give c == 32 || c == 9 || c == 13 || c == 10
+}
+
+make bg_trim(s: str) -> str {
+  hold n = len(s)
+  hold a = 0
+  while a < n && bg_ws(sx_index(s, a)) == 1 {
+    a = a + 1
+  }
+  hold b = n
+  while b > a && bg_ws(sx_index(s, b - 1)) == 1 {
+    b = b - 1
+  }
+  when a >= b {
+    give ""
+  }
+  give sub(s, a, b)
+}
+
+// 1 when `s` is all ASCII digits and non-empty, i.e. a positive integer literal
+// for BUDGET.md's value rule. A ".", a "-" or a name makes this 0, which is the
+// refusal the spec asks for.
+make bg_digits(s: str) -> num {
+  hold n = len(s)
+  when n == 0 {
+    give 0
+  }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(s, i)
+    when c < 48 || c > 57 {
+      give 0
+    }
+    i = i + 1
+  }
+  give 1
+}
+
+// One of BUDGET.md §2's hard caps, by key index: 0 frames, 1 locals, 2 lists.
+make bg_cap(k: num) -> num {
+  when k == 0 {
+    give 64
+  }
+  when k == 1 {
+    give 60
+  }
+  give 16
+}
+
+// Parses an `@budget(...)` body into "|frames|locals|lists|", validating every
+// rule in BUDGET.md §1 and §2. -1 is the "not declared" marker.
+make bg_parse(body: str, lineno: num) -> num {
+  hold f = 0 - 1
+  hold l = 0 - 1
+  hold x = 0 - 1
+  hold n = len(body)
+  hold pos = 0
+  hold anypair = 0
+  while pos < n {
+    hold comma = find_byte(sub(body, pos, n), 44)
+    hold stop = n
+    when comma >= 0 {
+      stop = pos + comma
+    }
+    hold piece = bg_trim(sub(body, pos, stop))
+    pos = stop + 1
+    when len(piece) > 0 {
+      hold colon = find_byte(piece, 58)
+      when colon < 0 {
+        hold badpair = fail(1, concat(concat("line ", numstr(lineno)), ": @budget entries are `key: value`"))
+      }
+      hold k = bg_trim(sub(piece, 0, colon))
+      hold v = bg_trim(sub(piece, colon + 1, len(piece)))
+      hold ki = 0 - 1
+      when string_eq(k, "frames") == 1 {
+        ki = 0
+      }
+      when string_eq(k, "locals") == 1 {
+        ki = 1
+      }
+      when string_eq(k, "lists") == 1 {
+        ki = 2
+      }
+      when ki < 0 {
+        hold badkey = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": unknown @budget key '", k)), "' (frames, locals, lists)"))
+      }
+      when bg_digits(v) == 0 {
+        hold badval = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": @budget ", k)), " needs a positive integer literal"))
+      }
+      hold nv = 0
+      hold vi = 0
+      while vi < len(v) {
+        nv = nv * 10 + (sx_index(v, vi) - 48)
+        vi = vi + 1
+      }
+      when nv <= 0 {
+        hold zeroval = fail(1, concat(concat(concat("line ", numstr(lineno)), concat(": @budget ", k)), " must be greater than zero"))
+      }
+      hold cap = bg_cap(ki)
+      when nv > cap {
+        hold overcap = fail(1, concat(concat(concat(concat("line ", numstr(lineno)), concat(": @budget ", k)), concat(" of ", numstr(nv))), concat(concat(" exceeds the ", numstr(cap)), " word/frame/element hard cap")))
+      }
+      when ki == 0 {
+        when f >= 0 {
+          hold dupf = fail(1, concat(concat("line ", numstr(lineno)), ": @budget repeats the frames key"))
+        }
+        f = nv
+      }
+      when ki == 1 {
+        when l >= 0 {
+          hold dupl = fail(1, concat(concat("line ", numstr(lineno)), ": @budget repeats the locals key"))
+        }
+        l = nv
+      }
+      when ki == 2 {
+        when x >= 0 {
+          hold dupx = fail(1, concat(concat("line ", numstr(lineno)), ": @budget repeats the lists key"))
+        }
+        x = nv
+      }
+      anypair = anypair + 1
+    }
+  }
+  when anypair == 0 {
+    hold emptybudget = fail(1, concat(concat("line ", numstr(lineno)), ": @budget() constrains nothing"))
+  }
+  // Record the triple directly, in declaration order, and hand back a marker the
+  // caller only uses to know an annotation was seen.
+  bg_decl = push(bg_decl, f)
+  bg_decl = push(bg_decl, l)
+  bg_decl = push(bg_decl, x)
+  give 1
+}
+
+// Cheap pre-scan: 1 when a line is a `@budget` annotation. Keeps a program
+// without the feature on a path that allocates nothing.
+make bg_has_anno(text: str) -> num {
+  hold n = len(text)
+  hold pos = 0
+  hold atbol = 1
+  while pos < n {
+    hold c = sx_index(text, pos)
+    when c == 10 {
+      atbol = 1
+    } otherwise {
+      when atbol == 1 && bg_ws(c) == 1 {
+        atbol = 1
+      } otherwise {
+        when atbol == 1 {
+          when c == 64 && pos + 6 < n && sx_index(text, pos + 1) == 98 && sx_index(text, pos + 2) == 117 && sx_index(text, pos + 3) == 100 && sx_index(text, pos + 4) == 103 && sx_index(text, pos + 5) == 101 && sx_index(text, pos + 6) == 116 {
+            give 1
+          }
+          atbol = 0
+        }
+      }
+    }
+    pos = pos + 1
+  }
+  give 0
+}
+
+// Strips every `@budget(...)` line from `text` and records one triple per
+// remaining make. A `@budget` that is not immediately followed by a make is a
+// refusal (BUDGET.md §8), which is also what stops an annotation from being
+// silently dropped.
+make bg_strip(text: str) -> str {
+  hold out = ""
+  hold n = len(text)
+  hold pos = 0
+  hold sawanno = 0
+  hold lineno = 0
+  while pos <= n {
+    hold eol = find_byte(sub(text, pos, n), 10)
+    hold stop = n
+    when eol >= 0 {
+      stop = pos + eol
+    }
+    hold raw = sub(text, pos, stop)
+    hold line = bg_trim(raw)
+    pos = stop + 1
+    lineno = lineno + 1
+    hold isanno = 0
+    when len(line) >= 7 && sx_index(line, 0) == 64 && sx_index(line, 1) == 98 && sx_index(line, 2) == 117 && sx_index(line, 3) == 100 && sx_index(line, 4) == 103 && sx_index(line, 5) == 101 && sx_index(line, 6) == 116 {
+      isanno = 1
+    }
+    when isanno == 1 {
+      when sawanno == 1 {
+        hold twobudgets = fail(1, concat(concat("line ", numstr(lineno)), ": @budget appears twice before one make"))
+      }
+      hold op = find_byte(line, 40)
+      hold cp = find_byte(line, 41)
+      when op < 0 || cp < op {
+        hold malformed = fail(1, concat(concat("line ", numstr(lineno)), ": @budget needs a parenthesised key list"))
+      }
+      hold parsed = bg_parse(sub(line, op + 1, cp), lineno)
+      sawanno = 1
+      // Erased: the line is not appended to `out` at all, so the text handed to
+      // the rest of the pipeline carries one fewer line and no trace of it.
+    } otherwise {
+      hold ismake = 0
+      when len(line) >= 5 && sx_index(line, 0) == 109 && sx_index(line, 1) == 97 && sx_index(line, 2) == 107 && sx_index(line, 3) == 101 && sx_index(line, 4) == 32 {
+        ismake = 1
+      }
+      when ismake == 1 {
+        when sawanno == 0 {
+          // No annotation: three "not declared" markers still occupy this
+          // function's slot, so bg_get's index is the declaration index.
+          bg_decl = push(bg_decl, 0 - 1)
+          bg_decl = push(bg_decl, 0 - 1)
+          bg_decl = push(bg_decl, 0 - 1)
+        }
+        sawanno = 0
+      } otherwise {
+        when sawanno == 1 && len(line) > 0 {
+          hold orphan = fail(1, concat(concat("line ", numstr(lineno)), ": @budget must precede a make declaration"))
+        }
+      }
+      out = concat(out, concat(raw, "\n"))
+    }
+  }
+  when sawanno == 1 {
+    hold dangling = fail(1, "@budget at end of file does not precede a make declaration")
+  }
+  give out
+}
+
+// The cost the emitter charged for function fi, in the same units the budget
+// speaks: one word per frame word of locals. (fn_frame_words[] is the emitter's
+// own count; BUDGET.md §3 requires agreement with it, so this reads it.)
+make bg_proven_locals(fi: num) -> num {
+  when fi < 0 || fi >= len(fn_frame_words) {
+    give 0
+  }
+  give fn_frame_words[fi]
+}
+
+// §3 and §4: compare declared locals and lists against the proven cost. §6
+// (frames) is checked separately by bg_check_frames.
+make bg_check_bodies() -> num {
+  hold fi = 0
+  while fi < fn_count && fi < len(fn_line) {
+    hold dl = bg_get(fi, 1)
+    when dl >= 0 {
+      hold pl = bg_proven_locals(fi)
+      when pl > dl {
+        hold msg = concat(concat(concat("line ", numstr(fn_line[fi])), concat(": function uses ", numstr(pl))), " words of locals")
+        msg = concat(msg, concat(", over its declared @budget locals: ", numstr(dl)))
+        hold over = fail(1, msg)
+      }
+    }
+    hold dx = bg_get(fi, 2)
+    when dx >= 0 {
+      hold px = list_proven_max(fi)
+      when px > dx {
+        hold msgx = concat(concat(concat("line ", numstr(fn_line[fi])), concat(": a list holds ", numstr(px))), " elements")
+        msgx = concat(msgx, concat(", over its declared @budget lists: ", numstr(dx)))
+        hold overx = fail(1, msgx)
+      }
+    }
+    fi = fi + 1
+  }
+  give 0
+}
+
+// ---- frames: the call graph, BUDGET.md §5 and §6 -------------------------
+// A cycle -- direct or mutual -- means reachable depth is the 64-frame cap, so a
+// declared `frames` below 64 on any function that reaches a cycle is a refusal.
+// An acyclic graph gives an exact longest-path depth.
+
+// 1 when function `to` is reachable from `from` by one or more call edges.
+make bg_reaches(from: num, to: num, seen: list) -> num {
+  // call_patch is flat [site, fn, ...] pairs: the caller is at index 2p+1 of
+  // the pair's first word. Indexing must stay inside the list, so the bounds
+  // are computed from len/2 and each access is 2*p and 2*p+1.
+  hold np = len(call_patch) / 2
+  hold p = 0
+  while p < np {
+    hold caller = bg_caller[p]
+    when caller == from {
+      hold callee = call_patch[p * 2 + 1]
+      when callee == to {
+        give 1
+      }
+      hold fresh = 1
+      hold sk = 0
+      while sk < len(seen) {
+        when seen[sk] == callee {
+          fresh = 0
+        }
+        sk = sk + 1
+      }
+      when fresh == 1 {
+        hold nx = push(seen, callee)
+        when bg_reaches(callee, to, nx) == 1 {
+          give 1
+        }
+      }
+    }
+    p = p + 1
+  }
+  give 0
+}
+
+// Longest call chain below function fi, i.e. the deepest stack of frames it can
+// reach, not counting fi. A leaf gives 0. Cycles are handled by the caller.
+make bg_depth(fi: num, guard: num) -> num {
+  when guard > 64 {
+    give 64
+  }
+  hold best = 0
+  hold n = len(call_patch) / 2
+  hold i = 0
+  while i < n {
+    when bg_caller[i] == fi {
+      hold callee = call_patch[i * 2 + 1]
+      // The chain *below* fi: reaching callee costs callee's own frame plus
+      // whatever it reaches. bg_depth returns "frames below", so a leaf is 0
+      // and calling a leaf costs 1.
+      hold sub_depth = bg_depth(callee, guard + 1)
+      hold d = 1 + sub_depth
+      when d > best {
+        best = d
+      }
+    }
+    i = i + 1
+  }
+  give best
+}
+
+// §5 and §6. The proven reachable depth of fi is 1 + its longest chain; a
+// function that reaches a cycle has proven depth 64 and may only declare
+// frames: 64.
+// The callee that costs `fi` the most frames, for the §6 diagnostic. Only a
+// callee that is not itself in a cycle is a candidate: a cyclic callee is
+// already refused by §5 at its own declaration.
+make bg_worst_callee(fi: num, df: num) -> str {
+  hold bestname = ""
+  hold best = 0
+  hold n = len(call_patch) / 2
+  hold ci = 0
+  while ci < n {
+    when bg_caller[ci] == fi {
+      hold callee = call_patch[ci * 2 + 1]
+      when bg_reaches(callee, callee, [callee]) == 0 {
+        hold need = 1 + bg_depth(callee, 0)
+        when need > best {
+          best = need
+          bestname = nth_field(fn_nametbl, callee)
+        }
+      }
+    }
+    ci = ci + 1
+  }
+  give bestname
+}
+
+// The same number bg_worst_callee() selected, so the message cannot drift from
+// the choice.
+make bg_worst_need(fi: num) -> num {
+  hold best = 0
+  hold n = len(call_patch) / 2
+  hold ci = 0
+  while ci < n {
+    when bg_caller[ci] == fi {
+      hold callee = call_patch[ci * 2 + 1]
+      when bg_reaches(callee, callee, [callee]) == 0 {
+        hold need = 1 + bg_depth(callee, 0)
+        when need > best {
+          best = need
+        }
+      }
+    }
+    ci = ci + 1
+  }
+  give best
+}
+
+make bg_check_frames() -> num {
+  hold fi = 0
+  while fi < fn_count && fi < len(fn_line) {
+    hold df = bg_get(fi, 0)
+    when df >= 0 {
+      hold cyclic = bg_reaches(fi, fi, [fi])
+      hold below = bg_depth(fi, 0)
+      // §5: a cycle makes the reachable depth the cap, otherwise it is one plus
+      // the longest chain below (bg_depth already counts each callee's frame).
+      hold proven = (1 - cyclic) * (1 + below) + cyclic * 64
+      when cyclic == 1 && df < 64 {
+        hold cyc = fail(1, concat(concat(concat("line ", numstr(fn_line[fi])), ": recursive function may not declare @budget frames below the 64-frame cap, declared "), numstr(df)))
+      }
+      // §6 first: when the overrun is caused by a call, the diagnostic must name
+      // the call site and both numbers, which is more useful than the aggregate
+      // depth. §5 then catches an overrun that no single call explains.
+      when cyclic == 0 && proven > df {
+        // §6: blame the single call that needs the most, when one does, so the
+        // diagnostic names the call site and both numbers. A callee that is
+        // itself part of a cycle is skipped here: §5 already charges it the cap
+        // and refuses anything below the cap, so re-reporting it would only
+        // obscure the rule that actually fired.
+        hold blamed = bg_worst_callee(fi, df)
+        when len(blamed) > 0 {
+          hold sitemsg = concat(concat(concat("line ", numstr(fn_line[fi])), ": call to "), blamed)
+          sitemsg = concat(sitemsg, concat(" needs ", concat(numstr(bg_worst_need(fi)), " frames, over the caller's declared @budget frames")))
+          hold callover = fail(1, sitemsg)
+        }
+        hold overf = fail(1, concat(concat(concat("line ", numstr(fn_line[fi])), ": function reaches "), concat(numstr(proven), " frames, over its declared @budget frames")))
+      }
+    }
+    fi = fi + 1
+  }
+  give 0
+}
+
+// The largest element count any list literal in function fi declares, or 16 for
+// an empty-origin list. listnames carries "|name=capacity|" rows and the
+// function each belongs to is not recorded per row, so this reads the capacity
+// the emitter reserved for each list declared while fi was the active function.
+// It uses the same 16 the emitter uses (BUDGET.md §4).
+make list_proven_max(fi: num) -> num {
+  hold n = len(fn_listcap)
+  hold best = 0
+  hold i = 0
+  while i < n {
+    when fn_listcap_fn[i] == fi {
+      when fn_listcap[i] > best {
+        best = fn_listcap[i]
+      }
+    }
+    i = i + 1
+  }
+  give best
+}
+
+// Value k (0 frames, 1 locals, 2 lists) declared for function fi, or -1.
+make bg_get(fi: num, k: num) -> num {
+  // bg_decl holds three numbers per make, in declaration order, filled by
+  // bg_strip: -1 is "not declared".
+  hold at = fi * 3 + k
+  when at < 0 || at >= len(bg_decl) {
+    give 0 - 1
+  }
+  give bg_decl[at]
+}
+
 // the main walk keeps the original line numbers for diagnostics.
 make lift_functions() -> str {
   hold out = ""
@@ -4865,6 +5333,10 @@ make emit_list_grow_init(nm: str, slot: num) -> num {
   }
   listnames = concat(listnames, concat(concat(concat("|", nm), "="), concat(numstr(capacity), "|")))
   listnames = concat(listnames, concat(concat(concat("|#", nm), "="), concat(numstr(length_slot), "|")))
+  when fn_active >= 0 {
+    fn_listcap = push(fn_listcap, capacity)
+    fn_listcap_fn = push(fn_listcap_fn, fn_active)
+  }
   code = emit_push_imm2(code, arch, 0)
   code = emit_pop_acc(code, arch)
   code = emit_store_var(code, arch, length_slot)
@@ -5118,6 +5590,10 @@ make emit_statements() -> num {
           // data segment and are filled in place, so nothing is emitted.
           when fn_active >= 0 {
             fn_frame_words[fn_active] = fn_frame_words[fn_active] + (lel - 1)
+            // BUDGET.md §4: a list literal's declared element count is what the
+            // `lists` budget is compared against.
+            fn_listcap = push(fn_listcap, lel)
+            fn_listcap_fn = push(fn_listcap_fn, fn_active)
             when fn_frame_words[fn_active] > 60 {
               hold big_list_frame = fail(1, concat(concat("line ", numstr(lineno)), ": a make body keeps at most 60 words of locals in a frame"))
             }
@@ -7441,6 +7917,13 @@ make run() -> num {
   when len(src) == 0 {
     hold nosrc = fail(1, concat(concat("cannot read ", srcpath), " (or it is empty)"))
   }
+  // docs/BUDGET.md: the annotation is stripped before anything else sees the
+  // source, and one "|frames|locals|lists|" triple is recorded per make. A
+  // program without `@budget` pays one scan and no allocation, because bg_strip
+  // only builds a new string when it finds an annotation.
+  when bg_has_anno(src) == 1 {
+    src = bg_strip(src)
+  }
   src = n32_lower(src)
 
   // A '{' inside a string literal that sits in a `when` CONDITION is read by
@@ -7680,6 +8163,10 @@ make run() -> num {
   hold ioscan = io_scan()
   lineno = 0
   hold em_walk = emit_statements()
+  // docs/BUDGET.md §3/§6: the declared budget is checked against the cost the
+  // emitter actually charged, which is fn_frame_words[] -- the checker agrees
+  // with that count rather than recomputing one of its own. This runs after the
+  // body walk because the count is only final then.
   hold fnu = fn_user_count()
   when fnu > 0 {
     depth_slot = len(data)
@@ -7781,6 +8268,14 @@ make run() -> num {
       strnames = saved_strnames
       listnames = saved_listnames
       fi = fi + 1
+    }
+    // docs/BUDGET.md: the declared budget is checked here, after the body walk,
+    // because fn_frame_words[] is only final once every body has been walked.
+    // The checker reads that array rather than recomputing a count, which is
+    // what §3 asks for.
+    when len(bg_decl) > 0 {
+      hold bcheck = bg_check_bodies()
+      hold fcheck = bg_check_frames()
     }
     code = patch_jmp(code, arch, fn_skip, len(code))
     hold cs = 0

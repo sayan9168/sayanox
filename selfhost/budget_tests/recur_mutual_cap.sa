@@ -1,0 +1,15 @@
+// BUDGET.md §5: mutual recursion is a cycle, so it also needs the cap.
+@budget(frames: 64)
+make even(n: num) -> num {
+  when n == 0 {
+    give 1
+  }
+  give odd(n - 1)
+}
+make odd(n: num) -> num {
+  when n == 0 {
+    give 0
+  }
+  give even(n - 1)
+}
+show even(4)

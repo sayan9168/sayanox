@@ -1,0 +1,6 @@
+@budget(lists: 2)
+make f() -> num {
+  hold xs = [1,2,3]
+  give xs[0]
+}
+show f()

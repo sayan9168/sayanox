@@ -44,6 +44,7 @@ use "tools/sxir_targets_lib.sa"
 use "tools/sxaudit_targets_lib.sa"
 use "tools/sxlast_language_targets_lib.sa"
 use "tools/sxisa_targets_lib.sa"
+use "tools/sxbudget_targets_lib.sa"
 use "tools/sxclaims_lib.sa"
 use "tools/sxaggregate_lib.sa"
 use "tools/sxrunner_targets_lib.sa"
@@ -58,6 +59,7 @@ make target_alias(name: str) -> str {
   when string_eq(name, "selfhost/seed/sxc_seed_min") == 1 { give "seed-min-bin" }
   when string_eq(name, "selfhost/gen1_min") == 1 || string_eq(name, "selfhost/gen1_min.c") == 1 { give "gen1" }
   when string_eq(name, "selfhost/gen2") == 1 || string_eq(name, "selfhost/gen2.c") == 1 { give "gen2" }
+  when string_eq(name, "selfhost/budget_model") == 1 { give "budget-model" }
   when string_eq(name, "tools/sxc_native") == 1 { give "sxc-native" }
   give name
 }
@@ -78,6 +80,7 @@ make target_memory_known(name: str) -> num {
 make target_known(name: str) -> num {
   when ag_known(name) == 1 { give 1 }
   when xc_known(name) == 1 { give 1 }
+  when xg_known(name) == 1 { give 1 }
   when xa_known(name) == 1 || xl_known(name) == 1 || string_eq(name, "test-last-language") == 1 || string_eq(name, "all-sayanox") == 1 { give 1 }
   when xi_known(name) == 1 { give 1 }
   when xf_known(name) == 1 || string_eq(name, "test-front-end-acceptance") == 1 { give 1 }
@@ -88,7 +91,7 @@ make target_known(name: str) -> num {
   when target_memory_known(name) == 1 || string_eq(name, "test-memory") == 1 { give 1 }
   when string_eq(name, target_alias(name)) == 0 { give target_known(target_alias(name)) }
   when len(target_file_tool(name)) > 0 || string_eq(name, "doctor") == 1 { give 1 }
-  when string_eq(name, "clean") == 1 || string_eq(name, "clean-plan") == 1 { give 1 }
+  when string_eq(name, "clean") == 1 || string_eq(name, "clean-plan") == 1 || string_eq(name, "budget-model") == 1 { give 1 }
   when pg_known(name) == 1 || mp_known(name) == 1 || rt_known(name) == 1 || ep_known(name) == 1 || string_eq(name, "test-ported") == 1 || string_eq(name, "test-ported-more") == 1 { give 1 }
   when sg_known(name) == 1 { give 1 }
   when string_eq(name, "verify-seed") == 1 || string_eq(name, "fix-seed") == 1 || string_eq(name, "restore-compiler") == 1 || string_eq(name, "restore-compiler-module") == 1 || string_eq(name, "seed-min-bin") == 1 || string_eq(name, "gen1") == 1 || string_eq(name, "gen2") == 1 || string_eq(name, "sxc-native") == 1 || string_eq(name, "bootstrap-gen3") == 1 || string_eq(name, "native") == 1 || string_eq(name, "lsp") == 1 {
@@ -156,6 +159,25 @@ make target_more_ready(name: str, built: list) -> num {
   give 0
 }
 
+// The independent budget model: a Sayanox program, built by the native compiler
+// like any other in this tree. Published only after it compiles, so the gate can
+// never compare the compiler against a stale model.
+make cmd_budget_model() -> num {
+  hold src = "selfhost/budget_model.sa"
+  hold out = "selfhost/budget_model"
+  hold tmp = concat(out, ".sxbuild_new")
+  hold cmd = concat(sh_quote(sxc_native_bin()), " ")
+  cmd = concat(cmd, concat(sh_quote(src), " "))
+  cmd = concat(cmd, sh_quote(tmp))
+  when run_command(concat("LC_ALL=C ", cmd)) != 0 {
+    hold rm = remove_path(tmp)
+    hold e = fail(1, "budget model compilation failed")
+  }
+  hold inst = target_run(concat(concat("mv -f ", sh_quote(tmp)), concat(" ", sh_quote(out))), "install budget-model")
+  show "[OK] native tool: budget_model"
+  give 0
+}
+
 make cmd_target(name: str, built: list) -> num {
   when string_eq(name, target_alias(name)) == 0 { give cmd_target(target_alias(name), built) }
   when len(target_file_tool(name)) > 0 { give target_native_tool(target_file_tool(name)) }
@@ -182,6 +204,13 @@ make cmd_target(name: str, built: list) -> num {
     hold deps = target_mask_ready(7, built)
     hold compiler = target_native_tool("native32")
     when string_eq(name, "test-sxmod") == 1 { hold binder = target_native_tool("sxmod") }
+    give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
+  }
+  when xg_known(name) == 1 {
+    // The budget gate needs the multi-ISA emitter and its independent model.
+    hold deps = target_mask_ready(7, built)
+    hold compiler = target_native_tool("native32")
+    hold model = cmd_target("selfhost/budget_model", built)
     give target_run(concat("./tools/sxgates ", sh_quote(name)), name)
   }
   when string_eq(name, "all-sayanox") == 1 { give cmd_all_sayanox() }
@@ -388,6 +417,9 @@ make cmd_target(name: str, built: list) -> num {
   }
   when string_eq(name, "sxc-native") == 1 {
     give bt_build(3, built)
+  }
+  when string_eq(name, "budget-model") == 1 {
+    give cmd_budget_model()
   }
   when string_eq(name, "bootstrap-gen3") == 1 {
     give bt_build(4, built)

@@ -346,8 +346,26 @@ make expand_use(src: str, dir: str, depth: num) -> str {
       out = concat(out, expand_use(body, dir, depth + 1))
       handled = 1
     }
+    // A `@budget(...)` line is erased here, at the one point every native front
+    // end passes through, so the annotation never reaches a parser and an
+    // unannotated program's text is untouched. It becomes a comment rather than
+    // vanishing: the line is still emitted, so every diagnostic and line-table
+    // entry below keeps the number the author sees. The claim is still checked
+    // -- native32 verifies it where frames and locals are assigned.
+    hold budgetline = 0
+    hold isb = 0
+    when q + 7 <= te && at(src, sn, q) == 64 && at(src, sn, q + 1) == 98 && at(src, sn, q + 2) == 117 && at(src, sn, q + 3) == 100 && at(src, sn, q + 4) == 103 && at(src, sn, q + 5) == 101 && at(src, sn, q + 6) == 116 {
+      isb = 1
+    }
+    when handled == 0 && isb == 1 {
+      budgetline = 1
+    }
     when handled != 1 {
-      out = concat(out, sub(src, ls, te))
+      when budgetline == 1 {
+        out = concat(out, "//")
+      } otherwise {
+        out = concat(out, sub(src, ls, te))
+      }
     }
     when le < sn {
       out = concat(out, "\n")
