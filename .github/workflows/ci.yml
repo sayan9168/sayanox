@@ -24,7 +24,10 @@ jobs:
   migrated-gates:
     name: Sayanox entry and migrated acceptance gates
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The full bootstrap chain measures 51-69 minutes. 90 left too little margin
+    # for runner variance: run 45574765377 failed at exactly 1h30m with no
+    # assertion failing anywhere.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - name: Verify reviewed entry and source checksums before execution
@@ -41,6 +44,11 @@ jobs:
         run: ./sx target test-remaining-stdlib
       - name: Remaining implemented acceptance executables
         run: ./sx target test-sxpkg-pubkey test-sxpkg-transfer-hardening test-sxc-native test-sxisaexec test-sxmod-deep test-release-identity
+      # The @budget contract gate. Registered as its own step because it is the
+      # only place the annotation is actually *checked*: every other lane erases
+      # it, so nothing else in CI would notice a broken checker.
+      - name: Checked resource-budget contract (@budget)
+        run: ./sx target test-fn-budget
       - name: Formatter acceptance (legacy pin and syntax-aware mode)
         run: ./sx target test-sxfmt test-sxfmt-syntax
       - name: Check forbidden invocation evidence, even after a failed gate
@@ -50,7 +58,10 @@ jobs:
   full-acceptance-blocker:
     name: Complete original acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The full bootstrap chain measures 51-69 minutes. 90 left too little margin
+    # for runner variance: run 45574765377 failed at exactly 1h30m with no
+    # assertion failing anywhere.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - name: Verify reviewed entry and source checksums before execution
