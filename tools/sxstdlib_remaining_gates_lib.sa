@@ -111,7 +111,26 @@ make xq_ci_workflow(path: str, jobs: num) -> num {
   hold check = gl_assert_eq_num(pr_count(path, "        run: ./sx ci-guard-check", 1, 1, 0, 0), jobs, "every job checks forbidden invocation evidence")
   hold always = gl_assert_eq_num(pr_count(path, "        if: always()", 1, 1, 0, 0), jobs, "guard checks survive gate failures")
   hold runners = gl_assert_eq_num(pr_count(path, "    runs-on: ubuntu-latest", 1, 1, 0, 0), jobs, "native entry runner platform")
-  hold timeout = gl_assert_eq_num(pr_count(path, "    timeout-minutes: 90", 1, 1, 0, 0), jobs, "adequate original gate time budget")
+  // The floor is what matters: a job under 90 minutes provably cannot finish the
+  // bootstrap chain, but a larger budget is a scheduling decision, not a defect.
+  // Run 45574765377 hit exactly 1h30m on a slow runner with no assertion failing,
+  // so pinning the literal 90 punished raising the ceiling while allowing a drop.
+  //
+  // Two facts, both total: every job declares a timeout, and no declared value is
+  // below the floor. A single pattern that merely looks for a plausible number
+  // would accept 30, so the negative check carries the rule.
+  hold timeout = gl_assert_eq_num(pr_count(path, "timeout-minutes: [0-9]*", 0, 0, 0, 1), jobs, "every job declares a gate time budget")
+  // Three digits or more is always above the floor; only then test the 1-2 digit
+  // forms, so 120 is not read as "12" followed by "0".
+  // Total and precise: every job declares a budget, and that budget is either
+  // exactly the 90-minute floor or a three-digit value (GitHub's own maximum is
+  // 360, so three digits covers every legal ceiling). Counting the two accepted
+  // forms and requiring the sum to equal the job count rejects 30, 60 and 89 --
+  // and cannot misread 120 as "12" the way a bare two-digit pattern would.
+  hold three = pr_count(path, "timeout-minutes: [0-9][0-9][0-9]$", 0, 0, 0, 1)
+  hold exactly = pr_count(path, "timeout-minutes: 90$", 0, 0, 0, 1)
+  hold below = jobs - three - exactly
+  hold lowtime = gl_assert_eq_num(below, 0, "gate time budget is at least 90 minutes")
   hold noignore = pr_assert(path, "^[[:space:]]*continue-on-error:", 0, 0, 0, 0, 0)
   hold nomake = pg_not_contains(path, "run: make ")
   hold nohandoff = pg_not_contains(path, "gate-binaries")
