@@ -382,6 +382,116 @@ make run_probe_part2(bin: str, work: str) -> num {
   give 0
 }
 
+// ---- Subcommand: budget (docs/BUDGET.md in the editor) --------------------
+//
+// The editor's job for @budget is narrow and is tested as such: hover reports
+// what the author declared, and diagnostics report only the rule violations
+// decidable from the text. A declaration that is well formed but too tight is
+// NOT an editor diagnostic -- native32 owns that verdict, and test-fn-budget
+// proves it. These assertions say so explicitly so a future change cannot
+// quietly start guessing at the proven cost.
+// Index of the first occurrence, or -1. The probe has no gate library.
+make bg_index_of(hay: str, needle: str) -> num {
+  hold nh = len(hay)
+  hold nn = len(needle)
+  when nn == 0 { give 0 }
+  when nn > nh { give 0 - 1 }
+  hold i = 0
+  while i <= nh - nn {
+    hold j = 0
+    hold ok = 1
+    while j < nn && ok == 1 {
+      when sx_index(hay, i + j) != sx_index(needle, j) { ok = 0 }
+      j = j + 1
+    }
+    when ok == 1 { give i }
+    i = i + 1
+  }
+  give 0 - 1
+}
+
+make bg_tail(t: str, from: num) -> str {
+  hold out = ""
+  hold i = from
+  while i < len(t) {
+    out = concat(out, chr(sx_index(t, i)))
+    i = i + 1
+  }
+  give out
+}
+
+make run_budget(bin: str) -> num {
+  hold uri = "file:///budget.sa"
+  hold init = lsp_frame("~\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":~\"capabilities\":~~||")
+  hold shut = lsp_frame("~\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\",\"params\":~~|")
+  hold exitmsg = lsp_frame("~\"jsonrpc\":\"2.0\",\"method\":\"exit\"|")
+  // The document is assembled from line fragments so the ~/| placeholders that
+  // jb() rewrites are never part of the source text itself. Newlines are the
+  // JSON escape (backslash n), not a raw byte: jq() does not escape, and a raw
+  // newline inside a JSON string makes the whole didOpen frame unparseable.
+  hold nl = concat(chr(92), "n")
+  hold ob = "{"
+  hold cb = "}"
+  hold doc = ""
+  doc = concat(doc, concat("@budget(frames: 8, locals: 24, lists: 16)", nl))
+  doc = concat(doc, concat("make ok(x: num) -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give x + 1", concat(nl, concat(cb, nl))))
+  doc = concat(doc, concat("@budget(frames: 8, stack: 4)", nl))
+  doc = concat(doc, concat("make badkey(x: num) -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give x", concat(nl, concat(cb, nl))))
+  doc = concat(doc, concat("@budget(locals: 99)", nl))
+  doc = concat(doc, concat("make bigcap() -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give 1", concat(nl, concat(cb, nl))))
+  doc = concat(doc, concat("@budget(locals: 4, locals: 8)", nl))
+  doc = concat(doc, concat("make dupkey() -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give 2", concat(nl, concat(cb, nl))))
+  doc = concat(doc, concat("@budget(locals: n)", nl))
+  doc = concat(doc, concat("make nonlit() -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give 3", concat(nl, concat(cb, nl))))
+  doc = concat(doc, concat("@budget(locals: 0)", nl))
+  doc = concat(doc, concat("make zero() -> num ", concat(ob, nl)))
+  doc = concat(doc, concat("  give 4", concat(nl, concat(cb, nl))))
+
+  hold openD = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":~\"uri\":", concat(jq(uri), concat(",\"text\":", concat(jq(doc), "||")))))
+  hold hovOk = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"textDocument/hover\",\"params\":~\"textDocument\":~\"uri\":", concat(jq(uri), "|,\"position\":~\"line\":1,\"character\":5|||")))
+  hold diagA = lsp_frame(concat("~\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/diagnostic\",\"params\":~\"textDocument\":~\"uri\":", concat(jq(uri), "||")))
+  hold s = concat(init, concat(openD, concat(hovOk, concat(diagA, concat(shut, exitmsg)))))
+  hold out = run_lsp_raw(bin, s)
+
+  hold ok = check_has("budget hover names the declared keys", out, "**@budget** declared: frames 8, locals 24, lists 16")
+  ok = check_has("budget hover declines to guess the proven cost", out, "not recomputed here")
+  ok = check_has("budget diag unknown key", out, "unknown @budget key")
+  ok = check_has("budget diag above hard cap", out, "above the hard cap of 60")
+  ok = check_has("budget diag duplicate key", out, "duplicate @budget key")
+  ok = check_has("budget diag non-literal", out, "is not a positive integer literal")
+  ok = check_has("budget diag zero", out, concat("'0' is not a positive integer literal", ""))
+  // Exactly five violations on this document, and no more: a sixth would be the
+  // editor inventing a rule the compiler does not have.
+  // Count only inside the diagnostic *reply*: the same five are also pushed
+  // through publishDiagnostics on open, which is correct behavior and would
+  // otherwise double the count.
+  hold reply = ""
+  hold at = bg_index_of(out, "\"id\":52")
+  when at >= 0 { reply = bg_tail(out, at) }
+  when len(reply) == 0 { hold f0 = fail_probe("no diagnostic reply in the budget session", out) }
+  hold cnt = 0
+  hold n = len(reply)
+  hold i = 0
+  while i + 6 <= n {
+    when sx_index(reply, i) == 83 && sx_index(reply, i + 1) == 88 && sx_index(reply, i + 2) == 49 && sx_index(reply, i + 3) == 48 && sx_index(reply, i + 4) == 48 && sx_index(reply, i + 5) == 55 {
+      cnt = cnt + 1
+      i = i + 6
+    } otherwise {
+      i = i + 1
+    }
+  }
+  when cnt != 5 {
+    hold f = fail_probe(concat("budget diagnostics counted exactly five, got ", numstr(cnt)), out)
+  }
+  show "budget diagnostics counted exactly five"
+  give 0
+}
+
 // ---- Subcommand 2: robust (matches tools/sayanox-lsp-robust.sh) -----------
 
 make run_robust(bin: str) -> num {
@@ -578,6 +688,10 @@ when string_eq(mode, "probe") == 1 {
   hold r1c = run_probe_part3(lsp_bin, wd)
   hold r1d = run_probe_part4(lsp_bin, wd)
   hold e1 = exit(0)
+}
+when string_eq(mode, "budget") == 1 {
+  hold r4 = run_budget(lsp_bin)
+  hold e4 = exit(0)
 }
 when string_eq(mode, "robust") == 1 {
   hold r2 = run_robust(lsp_bin)

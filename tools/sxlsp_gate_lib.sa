@@ -7,5 +7,12 @@ make rt_lsp_probe(name: str) -> num {
   when string_eq(name, "test-lsp-robust") == 1 {
     give gl_assert_out("./tools/sxlsp_probe robust ./tools/sayanox_lsp", "unknown request -32601\nserver keeps serving after error\nunknown notification ignored\ngarbage body -32700\nno method -32600\njunk header skipped\ntruncated frame ends cleanly\nstring id echoed on a result\nstring id with an escaped quote echoed on an error\nnegative id echoed\nnull id echoed", "selfhost/seed_tests/lsp-probe.stdout")
   }
+  when string_eq(name, "test-lsp-budget") == 1 {
+    // @budget in the editor: the declared budget on hover, and the five
+    // rule violations decidable from the text as SX1007 diagnostics. The
+    // editor deliberately does NOT report a too-tight declaration -- the
+    // proven cost belongs to native32 and test-fn-budget proves it.
+    give gl_assert_out("./tools/sxlsp_probe budget ./tools/sayanox_lsp", "budget hover names the declared keys\nbudget hover declines to guess the proven cost\nbudget diag unknown key\nbudget diag above hard cap\nbudget diag duplicate key\nbudget diag non-literal\nbudget diag zero\nbudget diagnostics counted exactly five\n", "selfhost/seed_tests/lsp-probe.stdout")
+  }
   give fail(2, "unknown LSP probe")
 }

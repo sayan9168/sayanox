@@ -1261,6 +1261,72 @@ make diagnostics(text: str, dir: str) -> str {
     items = items + diag_item(popen_line, utf16_span(line_text(text, popen_line), 0), 1, "SX1004", "unbalanced parentheses", count)
     count += 1
   }
+  // SX1007/SX1008: the @budget rules decidable from the text alone. The proven
+  // cost is the compiler's, not the editor's, so a declaration that is well
+  // formed but too tight is NOT reported here -- native32 owns that verdict and
+  // test-fn-budget proves it. Reporting it here would be a second guess.
+  hold bl = 0
+  hold blines = count_lines(text)
+  while bl < blines {
+    hold bline = trim_text(strip_line_comment(line_text(text, bl)))
+    when starts(bline, 0, "@budget") == 1 {
+      hold bbody = budget_text_of(bline)
+      hold bmsg = ""
+      when len(bbody) == 0 {
+        bmsg = "@budget is missing its parenthesised keys, e.g. @budget(frames: 8)"
+      }
+      when len(bbody) > 0 && len(trim_text(bbody)) == 0 {
+        bmsg = "@budget() declares nothing; name at least one of frames, locals, lists"
+      }
+      when len(bmsg) == 0 {
+        // Key by key: unknown key, bad value form, value above the hard cap.
+        hold bp = 0
+        hold bseen = "|"
+        while bp < len(bbody) && len(bmsg) == 0 {
+          hold bs = bp
+          while bp < len(bbody) && sx_index(bbody, bp) != 44 { bp = bp + 1 }
+          hold bpair = bg_slice(bbody, bs, bp)
+          bp = bp + 1
+          hold bcolon = find(bpair, ":")
+          when bcolon < 0 {
+            bmsg = concat("expected 'key: value' in @budget, got '", concat(trim_text(bpair), "'"))
+          } otherwise {
+            hold bkey = trim_text(bg_slice(bpair, 0, bcolon))
+            hold bval = trim_text(bg_slice(bpair, bcolon + 1, len(bpair)))
+            when budget_cap(bkey) == 0 {
+              bmsg = concat("unknown @budget key '", concat(bkey, "'; the keys are frames, locals, lists"))
+            }
+            when len(bmsg) == 0 && find(bseen, concat(concat("|", bkey), "|")) >= 0 {
+              bmsg = concat("duplicate @budget key '", concat(bkey, "'"))
+            }
+            when len(bmsg) == 0 {
+              bseen = concat(bseen, concat(bkey, "|"))
+            }
+            when len(bmsg) == 0 && is_positive_int(bval) == 0 {
+              bmsg = concat("'", concat(bval, "' is not a positive integer literal"))
+            }
+            when len(bmsg) == 0 && budget_declared(bbody, bkey) > budget_cap(bkey) {
+              hold bcap = budget_cap(bkey)
+              bmsg = concat(concat("'", bkey), concat("' is above the hard cap of ", concat(numstr(bcap), "")))
+            }
+          }
+        }
+      }
+      // Placement: the annotation must sit immediately before a `make` header.
+      when len(bmsg) == 0 {
+        hold bnext = ""
+        when bl + 1 < blines { bnext = trim_text(strip_line_comment(line_text(text, bl + 1))) }
+        when starts(bnext, 0, "make ") == 0 {
+          bmsg = "@budget must appear on the line immediately before a make declaration"
+        }
+      }
+      when len(bmsg) > 0 {
+        items = items + diag_item(bl, utf16_span(line_text(text, bl), a - a), 2, "SX1007", bmsg, count)
+        count += 1
+      }
+    }
+    bl += 1
+  }
   give concat("[", concat(items, "]"))
 }
 
@@ -4360,6 +4426,148 @@ make lsp_infer_type(mode: num, target: str, doc: str, docuri: str, at_ln: num, d
   give ""
 }
 
+// ------------------------------------------------------- @budget (docs/BUDGET.md)
+//
+// The editor mirrors the checker's *rules*, not its numbers. Proven cost is the
+// emitter's accounting (fn_frame_words[]), which the LSP cannot recompute: the
+// language has no C compiler here, and a second implementation of the frame
+// accounting would be a second opinion nobody checks. So hover reports what the
+// author declared, and the diagnostic reports only rule violations that are
+// decidable from the text: key set, value form, hard caps, and an annotation
+// that does not precede a `make` header.
+
+// Local substring; the LSP does not link the gate library.
+make bg_slice(t: str, a: num, b: num) -> str {
+  hold out = ""
+  hold i = a
+  while i < b && i < len(t) {
+    out = concat(out, chr(sx_index(t, i)))
+    i = i + 1
+  }
+  give out
+}
+
+// The `@budget(...)` text on a line, or "" when the line has none.
+make budget_text_of(line: str) -> str {
+  hold at = find(line, "@budget")
+  when at < 0 {
+    give ""
+  }
+  hold n = len(line)
+  hold i = at + 7
+  hold depth = 0
+  hold from = 0 - 1
+  hold to = 0 - 1
+  while i < n {
+    hold c = sx_index(line, i)
+    when c == 40 {
+      when depth == 0 {
+        from = i + 1
+      }
+      depth = depth + 1
+    }
+    when c == 41 {
+      depth = depth - 1
+      when depth == 0 {
+        to = i
+        give bg_slice(line, from, to)
+      }
+    }
+    i = i + 1
+  }
+  give ""
+}
+
+// The value text for one key inside a budget body, or "" when absent.
+make budget_value(body: str, key: str) -> str {
+  hold pos = 0
+  hold n = len(body)
+  while pos < n {
+    hold start = pos
+    while pos < n && sx_index(body, pos) != 44 { pos = pos + 1 }
+    hold pair = bg_slice(body, start, pos)
+    pos = pos + 1
+    hold colon = find(pair, ":")
+    when colon >= 0 {
+      hold k = trim_text(bg_slice(pair, 0, colon))
+      when string_eq(k, key) == 1 {
+        give trim_text(bg_slice(pair, colon + 1, len(pair)))
+      }
+    }
+  }
+  give ""
+}
+
+make trim_text(t: str) -> str {
+  hold n = len(t)
+  hold a = 0
+  hold b = n
+  while a < n && (sx_index(t, a) == 32 || sx_index(t, a) == 9) { a = a + 1 }
+  while b > a && (sx_index(t, b - 1) == 32 || sx_index(t, b - 1) == 9) { b = b - 1 }
+  give bg_slice(t, a, b)
+}
+
+// Positive decimal literal of one or more digits, nothing else.
+make is_positive_int(t: str) -> num {
+  hold n = len(t)
+  when n <= 0 { give 0 }
+  when sx_index(t, 0) == 48 { give 0 }
+  hold i = 0
+  while i < n {
+    hold c = sx_index(t, i)
+    when c < 48 || c > 57 { give 0 }
+    i = i + 1
+  }
+  give 1
+}
+
+// The three hard caps from BUDGET.md section 2, as the checker enforces them.
+make budget_cap(key: str) -> num {
+  hold v = 0
+  when string_eq(key, "frames") == 1 { v = 64 }
+  when string_eq(key, "locals") == 1 { v = 60 }
+  when string_eq(key, "lists") == 1 { v = 16 }
+  give v
+}
+
+make budget_declared(body: str, key: str) -> num {
+  hold t = budget_value(body, key)
+  when is_positive_int(t) == 0 { give 0 }
+  give parse_int_str(t)
+}
+
+// A one-line summary of an annotation body, or "" when it declares nothing.
+make budget_summary(body: str) -> str {
+  hold out = ""
+  hold keys = "frames\nlocals\nlists\n"
+  hold pos = 0
+  hold first = 1
+  while pos < len(keys) {
+    hold start = pos
+    while pos < len(keys) && sx_index(keys, pos) != 10 { pos = pos + 1 }
+    hold key = bg_slice(keys, start, pos)
+    pos = pos + 1
+    when len(key) > 0 {
+      hold t = budget_value(body, key)
+      when is_positive_int(t) == 1 {
+        when first == 0 { out = concat(out, ", ") }
+        out = concat(out, concat(concat(key, " "), t))
+        first = 0
+      }
+    }
+  }
+  give out
+}
+
+// The @budget line governing the `make` whose declaration line is `fnl`, or -1.
+make budget_line_for(text: str, fnl: num) -> num {
+  when fnl <= 0 { give 0 - 1 }
+  hold prev = strip_line_comment(line_text(text, fnl - 1))
+  hold t = trim_text(prev)
+  when starts(t, 0, "@budget") == 1 { give fnl - 1 }
+  give 0 - 1
+}
+
 make wrap_hover_json(md: str) -> str {
   hold b = "{\"contents\":{\"kind\":\"markdown\",\"value\":\""
   b = b + json_esc(md)
@@ -4368,10 +4576,42 @@ make wrap_hover_json(md: str) -> str {
 }
 
 make hover_typed(w: str, doc: str, docuri: str, ln: num, ch: num, ws_root: str, manifest: str, u0: str, t0: str, u1: str, t1: str, u2: str, t2: str, u3: str, t3: str) -> str {
-  when len(doc) <= 0 || len(w) <= 0 {
+  when len(doc) <= 0 {
     give hover_for(w, doc)
   }
   hold lt = line_text(doc, ln)
+  // 0. The declared budget. This is answered before the word check because the
+  //    budget belongs to the *line*, not to the identifier under the cursor: a
+  //    cursor in the whitespace of a `make` header should still say what the
+  //    function promised. Erasure at run time does not stop the editor from
+  //    telling the author what they declared.
+  hold bsum = ""
+  hold bl = budget_line_for(doc, ln)
+  when bl >= 0 {
+    bsum = budget_summary(budget_text_of(line_text(doc, bl)))
+  }
+  when bl < 0 && starts(trim_text(lt), 0, "@budget") == 1 && ln + 1 < count_lines(doc) {
+    hold nl = strip_line_comment(line_text(doc, ln + 1))
+    when starts(trim_text(nl), 0, "make ") == 1 {
+      bsum = budget_summary(budget_text_of(lt))
+      bl = ln
+    }
+  }
+  when bl >= 0 {
+    hold bmd = concat("**@budget** declared: ", bsum)
+    when len(bsum) == 0 { bmd = "**@budget**: the annotation declares no budget." }
+    bmd = concat(bmd, "\n\nProven cost is the emitter's own accounting (`fn_frame_words[]`) and is not recomputed here; `./sx target test-fn-budget` checks that the declaration fits.")
+    when len(bsum) > 0 {
+      hold blk = budget_declared(budget_text_of(line_text(doc, bl)), "locals")
+      when blk > 0 {
+        bmd = concat(bmd, concat("\n\n`locals: ", concat(numstr(blk), "` words of this frame's budget.")))
+      }
+    }
+    give wrap_hover_json(bmd)
+  }
+  when len(w) <= 0 {
+    give hover_for(w, doc)
+  }
   hold bytepos = utf16_byte(lt, ch)
   // 1. Module member or struct field hover on recv.member
   hold recv = recv_before_dot(lt, bytepos)
