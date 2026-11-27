@@ -200,6 +200,35 @@ where it is not.
    must emit byte-identical images, and every pre-existing pinned image size must
    be unchanged.
 
+## The editor (LSP)
+
+`tools/sayanox_lsp` reports the contract in two places, and both are gated by
+`./sx target test-lsp-budget`.
+
+**Hover** on a `make` header that has a governing `@budget`, or on the annotation
+line itself, states the declared budget: `**@budget** declared: frames 8, locals
+24, lists 16`. It says explicitly that the proven cost is not recomputed here.
+
+**Diagnostics** (`SX1007`, warning severity) report only the rules decidable from
+the document text:
+
+| Condition | Message |
+| --- | --- |
+| key outside `frames`/`locals`/`lists` | `unknown @budget key 'stack'` |
+| key repeated | `duplicate @budget key 'locals'` |
+| value not a positive integer literal | `'n' is not a positive integer literal` |
+| value `0`, negative or fractional | `'0' is not a positive integer literal` |
+| value above the key's hard cap | `'locals' is above the hard cap of 60` |
+| not on the line before a `make` | `must appear on the line immediately before a make declaration` |
+
+The editor deliberately does **not** report a well-formed annotation whose
+declared budget is too small for the function's proven cost. That verdict needs
+`fn_frame_words[]` and the call graph, which belong to `native32`; a second
+implementation in the editor would be an unchecked second opinion that drifts.
+`test-fn-budget` proves that half, and the probe asserts that the editor counts
+exactly five diagnostics on a five-defect document — a sixth would be the editor
+inventing a rule.
+
 ## Limits, stated plainly
 
 - A static upper bound over the constructs **the current subset** can cost. The
@@ -217,5 +246,8 @@ where it is not.
   run time is bounded by the emitter's capacity, not by its declaration.
 - The C-output lane's allocator overhead is not counted; `locals` is frame words,
   which is a different quantity from RSS.
+- The editor half is **rule-level, not cost-level**: hover restates what was
+  declared, and no editor surface tells you whether the declaration is big
+  enough. Only `native32` and `test-fn-budget` decide that.
 - R04 (precise GC) and R02 (full native parity) remain open. Nothing here closes
   them.

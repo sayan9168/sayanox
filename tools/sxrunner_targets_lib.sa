@@ -19,7 +19,7 @@ make rt_lsp_client(name: str) -> str {
 make rt_known(name: str) -> num {
   when string_eq(name, "test-driver") == 1 || string_eq(name, "test-struct-mutation") == 1 || string_eq(name, "test-struct-string") == 1 { give 1 }
   when len(rt_suite(name)) > 0 || len(rt_lsp_client(name)) > 0 { give 1 }
-  when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 || string_eq(name, "test-release-identity") == 1 {
+  when string_eq(name, "test-native-stage2-parity") == 1 || string_eq(name, "test-sxpkg-pubkey") == 1 || string_eq(name, "test-sxpkg-transfer-hardening") == 1 || string_eq(name, "test-sxc-native") == 1 || string_eq(name, "test-sxisaexec") == 1 || string_eq(name, "test-sxmod-deep") == 1 || string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 || string_eq(name, "test-lsp-budget") == 1 || string_eq(name, "test-release-identity") == 1 {
     give 1
   }
   give 0
@@ -65,6 +65,14 @@ make rt_run(name: str, built: list) -> num {
     give target_run("./tools/sxtargets_test --without-make", name)
   }
   when len(rt_lsp_client(name)) > 0 { give rt_run_client(name, built) }
+  // @budget in the editor. Its own target rather than a row inside test-lsp:
+  // docs/BUDGET.md is a separate contract from the LSP's general behaviour, and
+  // a failure here should name the budget, not "test-lsp".
+  when string_eq(name, "test-lsp-budget") == 1 {
+    hold lb = target_native_tool("sxlsp_probe")
+    hold lb2 = target_native_tool("sayanox_lsp")
+    give rt_lsp_probe(name)
+  }
   when string_eq(name, "test-lsp") == 1 || string_eq(name, "test-lsp-robust") == 1 {
     hold a = rt_run_client("test-lsp-workspace", built)
     hold b = rt_run_client("test-lsp-semantic", built)

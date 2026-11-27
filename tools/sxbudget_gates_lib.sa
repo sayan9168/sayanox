@@ -255,6 +255,78 @@ make bg_parse_proven(text: str, marker: str, stop: str) -> num {
   give v
 }
 
+// BUDGET.md says the annotation is erased "on every lane". The three images
+// above prove the native32 lanes; this proves the IR lane, where the listing is
+// derived from native_aot's SX_EMIT_LOG rather than from native32 at all. If
+// erasure were implemented only in the multi-ISA checker, the IR listing would
+// carry the annotation through and this would catch it.
+//
+// The two listings are produced by the documented pipeline:
+//   SX_EMIT_LOG=<log> ./selfhost/native_aot <src> <out.elf>
+//   ./tools/emit_to_ir <log> > <out.ir>
+make bg_ir_of(source: str, stem: str, d: str) -> str {
+  when path_kind("./selfhost/native_aot") != 1 {
+    hold e0 = gl_fail("missing ./selfhost/native_aot")
+  }
+  when path_kind("./tools/emit_to_ir") != 1 {
+    hold e1 = gl_fail("missing ./tools/emit_to_ir")
+  }
+  hold elog = kp_join(d, concat(stem, ".emit.log"))
+  hold elf = kp_join(d, concat(stem, ".elf"))
+  hold ir = kp_join(d, concat(stem, ".ir"))
+  hold build = concat(concat("LC_ALL=C SX_EMIT_LOG=", gl_sh_quote(elog)), " ")
+  build = concat(build, concat(gl_sh_quote("./selfhost/native_aot"), " "))
+  build = concat(build, concat(gl_sh_quote(source), " "))
+  build = concat(build, concat(gl_sh_quote(elf), concat(" 2> ", gl_sh_quote(kp_join(d, concat(stem, ".err"))))))
+  when run_command(build) != 0 {
+    hold e2 = gl_fail(concat(concat("IR lane could not build ", source), read_file(kp_join(d, concat(stem, ".err")))))
+  }
+  hold cmd = concat(concat(gl_sh_quote("./tools/emit_to_ir"), " "), gl_sh_quote(elog))
+  cmd = concat(cmd, concat(" > ", gl_sh_quote(ir)))
+  when run_command(concat("LC_ALL=C ", cmd)) != 0 {
+    hold e3 = gl_fail(concat("emit_to_ir failed on ", source))
+  }
+  give ir
+}
+
+// The instruction stream, with the header stripped. The header names the input
+// file ("; native_aot instruction list for <path>"), so two different fixtures
+// always differ there; erasure is a claim about the *code*, not the banner. The
+// body starts at emit_to_ir's "; offset  instruction" marker.
+make bg_ir_body(source: str, stem: str, d: str) -> str {
+  hold ir = bg_ir_of(source, stem, d)
+  hold text = read_file(ir)
+  hold at = pg_find(text, "; offset  instruction")
+  when at < 0 {
+    hold e = gl_fail(concat("IR listing has no instruction header: ", ir))
+  }
+  hold body = gl_slice(text, at, len(text))
+  when len(body) < 64 {
+    hold e2 = gl_fail(concat("IR listing body is implausibly short: ", ir))
+  }
+  give body
+}
+
+make bg_ir_erasure(d: str) -> num {
+  hold plain = bg_ir_body("selfhost/budget_tests/plain.sa", "ir_plain", d)
+  hold twin = bg_ir_body("selfhost/budget_tests/plain_twin.sa", "ir_twin", d)
+  // The instruction stream must be identical: erasure is a property of the
+  // lowering, not of the image the linker happens to produce.
+  hold same = gl_assert_eq_str(plain, twin, "IR instruction stream must not carry an erased @budget")
+  // The annotation must not survive anywhere in the listing, as a word of its
+  // own. Compared on the body only, so the banner cannot mask a leak.
+  when pg_find(plain, "@budget") >= 0 {
+    hold e3 = gl_fail("IR listing still contains the @budget annotation")
+  }
+  // A comparison of two constant strings would satisfy everything above, so
+  // require the stream to distinguish two genuinely different programs.
+  hold other = bg_ir_body("selfhost/budget_tests/chain3.sa", "ir_other", d)
+  when string_eq(plain, other) == 1 {
+    hold e4 = gl_fail("IR listing does not distinguish two different programs")
+  }
+  give 0
+}
+
 // ---- the gate -------------------------------------------------------------
 
 // Accepted fixtures: compile on all three ISAs, run on i386, and the run must
@@ -479,7 +551,8 @@ make bg_dispatch() -> num {
   hold r = bg_refuse(d)
   hold nw = bg_no_want_refuses(d)
   hold e2 = bg_erasure(d)
+  hold ir = bg_ir_erasure(d)
   hold p = bg_preexisting(d)
-  show "[ok] @budget: 12 accepted fixtures on three ISAs, 22 refusals, erasure and pre-existing images intact"
+  show "[ok] @budget: 12 accepted fixtures on three ISAs, 22 refusals, image and IR erasure, pre-existing images intact"
   give 0
 }

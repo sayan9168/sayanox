@@ -46,6 +46,24 @@ when rc != 0 { show read_file(log) }
 hold gates = gl_assert_eq_num(rc, 0, "Sayanox-owned seed/build/test targets")
 show "[OK] Sayanox target-driver regression tests"
 
+// The integer printed at or after `at`, or -1 when the text there is not a
+// number. Used to read both halves of "coverage: N / M" without pinning either.
+make cov_number_at(t: str, at: num) -> num {
+  hold n = len(t)
+  hold i = at
+  while i < n && (sx_index(t, i) == 32) { i = i + 1 }
+  hold from = i
+  while i < n && sx_index(t, i) >= 48 && sx_index(t, i) <= 57 { i = i + 1 }
+  when i == from { give 0 - 1 }
+  hold v = 0
+  hold k = from
+  while k < i {
+    v = v * 10 + (sx_index(t, k) - 48)
+    k = k + 1
+  }
+  give v
+}
+
 // The native root entry survives removal of all generated compilers/tools.
 rc = gl_run_merged("./sx doctor", log)
 hold root_entry = gl_assert_eq_num(rc, 0, "native root entry doctor")
@@ -54,9 +72,23 @@ hold root_entry = gl_assert_eq_num(rc, 0, "native root entry doctor")
 // test-driver (and racing its shared fixtures with an outer acceptance run).
 rc = gl_run_merged("./sx migration", log)
 hold coverage = gl_assert_eq_num(rc, 0, "all original targets registered")
-hold complete = pg_contains(log, "Sayanox driver target coverage: 242 / 242")
-// Completeness is already enforced by the exit code above; this catches the
-// other direction, a registration that exists but no longer resolves.
+// The total is NOT pinned. Pinning it is how this line broke twice: migration
+// went 241 -> 242 -> 243 and each new target turned a green gate red for a
+// legitimate change. What must hold is the *property* -- the two numbers in
+// "coverage: N / M" agree, i.e. every registered target resolves. `./sx
+// migration` already exits 1 when they differ, so this re-derives the same fact
+// independently from the printed text, which also catches a message change that
+// silently stopped printing a mismatch.
+hold cov_text = read_file(log)
+hold cov_prefix = pg_find(cov_text, "Sayanox driver target coverage: ")
+when cov_prefix < 0 {
+  hold nocov = gl_fail("migration printed no coverage line at all")
+}
+hold cov_impl = cov_number_at(cov_text, cov_prefix + 32)
+hold cov_slash = cov_number_at(cov_text, cov_prefix + 32 + len(numstr(cov_impl)) + 3)
+hold cov_eq = gl_assert_eq_num(cov_impl, cov_slash, "every registered target resolves")
+// And the other direction: a registration that exists but no longer resolves
+// prints [PENDING] while the exit code can still be 0 if the counts coincide.
 hold none_pending = pg_not_contains(log, "[PENDING]")
 rc = gl_run_merged("CC=/__sayanox_deliberately_missing_cc__ ./sx ci", log)
 hold blocked_ci = gl_assert_eq_num(rc, 1, "CI prerequisite failure propagates")
