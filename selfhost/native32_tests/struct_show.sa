@@ -1,0 +1,11 @@
+// R02: `show` of a whole struct value. Only numeric fields are printable; a
+// string field is refused by name rather than flattened wrongly, because a
+// string operand is a (pointer, length) pair and `show` prints one scalar.
+struct Point { x, y }
+struct Triple { a, b, c }
+hold p = Point { 3, 4 }
+hold q = Point { 10, -2 }
+hold t = Triple { 1, 2, 3 }
+show p
+show q
+show t

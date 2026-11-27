@@ -1,0 +1,3 @@
+struct Hole { a, b }
+hold h = Hole { 1, 2 }
+show missing

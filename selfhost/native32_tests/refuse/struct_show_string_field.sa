@@ -1,0 +1,3 @@
+struct Rec { n, name }
+hold r = Rec { 7, "hi" }
+show r

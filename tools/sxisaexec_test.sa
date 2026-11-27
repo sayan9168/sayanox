@@ -1312,6 +1312,13 @@ hold vlistcall_oracle = assert_files_eq("selfhost/native32_tests/list_call.want"
 hold vlistindex = verify_six_way(dir, "list_index", "selfhost/native32_tests/list_index.sa", "selfhost/native32_tests/golden/list_index.arm64.elf", "selfhost/native32_tests/golden/list_index.riscv64.elf")
 hold vlistindex_oracle = assert_files_eq("selfhost/native32_tests/list_index.want", concat(dir, "/list_index.seed.out"), "list index independent oracle")
 hold vstruct = verify_six_way(dir, "struct_num", "selfhost/native32_tests/struct_num.sa", "selfhost/native32_tests/golden/struct_num.arm64.elf", "selfhost/native32_tests/golden/struct_num.riscv64.elf")
+// R02: `show` of a whole struct value. THREE native32 ISAs only, deliberately
+// not six-way: the C lanes (seed-min, gen2, native_aot) still refuse the form
+// with "show value cannot be a struct". Calling verify_six_way here would claim
+// parity the change does not have; the per-ISA goldens and the frozen .want are
+// the evidence for exactly what was implemented.
+hold vstruct_show = verify_native_only_list(dir, "struct_show")
+hold vstruct_show_oracle = assert_files_eq("selfhost/native32_tests/struct_show.want", concat(dir, "/struct_show-i386.elf.out"), "whole-struct show independent oracle")
 hold vstruct_oracle = assert_files_eq("selfhost/native32_tests/struct_num.want", concat(dir, "/struct_num.seed.out"), "numeric struct independent oracle")
 hold vstruct_string = verify_six_way(dir, "struct_string", "selfhost/native32_tests/struct_string.sa", "selfhost/native32_tests/golden/struct_string.arm64.elf", "selfhost/native32_tests/golden/struct_string.riscv64.elf")
 hold vstruct_string_oracle = assert_files_eq("selfhost/native32_tests/struct_string.want", concat(dir, "/struct_string.seed.out"), "string struct independent oracle")

@@ -1,3 +1,0 @@
-struct Point { x }
-hold p = Point { 1 }
-show p

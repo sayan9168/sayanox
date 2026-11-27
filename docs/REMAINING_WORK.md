@@ -67,6 +67,30 @@ exact decimal sums, means and grouping over CSV tables. Boundary, invalid-input
 and cross-backend output oracles run through `test-stdlib-next`. This does not
 close stdlib depth or replace complete guarded CI.
 
+## Local R02 increment: `show` of a whole struct value (2026-11-25)
+
+`tools/native32.sa` now prints a whole struct value bound by a struct literal,
+one line per field (`p.x=3`), on i386, AArch64 and RV64IM. The output is built
+from two constructs the emitter already had — a string literal for the
+`name.field=` label and the existing decimal print — so no new output shape was
+invented and a field's value comes from the slot `name.field` already resolved
+to. A struct with a **string** field is refused by name rather than flattened,
+because a string operand is a pair and one decimal print consumes one scalar; a
+field whose inferred kind is unknown is likewise refused by name.
+
+`refuse/struct_whole_value.sa` became the acceptance fixture `struct_show.sa`
+with a frozen `.want`, two new refusals were added, and the matrix moved
+105 → 106. `test-native32`, `test-native-arm64`, `test-native-riscv64` and
+`test-sxisaexec` pass with an independent oracle, deterministic i386 images and
+reviewed ARM/RV goldens at 8284 bytes.
+
+**The C lanes still refuse this form.** `seed-min`, `gen2` and `native_aot`
+report `show value cannot be a struct`; closing that needs the field kinds at
+the `show` site in `selfhost/compiler_min.sa` plus `sxc_seed_min.sa`,
+`native_aot.sa` and `compiler_text.sa`. Six-way parity is therefore not claimed,
+and `verify_six_way` is deliberately not called for this fixture. Nested structs,
+string fields and any format control remain open. R02 is not closed.
+
 ## Local R02 increment: string-field initializer parity (2026-11-19)
 
 The bounded string selector initializer is being extended to gen2 and x86-64;
