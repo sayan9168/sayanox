@@ -7,6 +7,27 @@
 // plus scalar IEEE-754 AArch64/RV64F/D arithmetic, Linux openat/read/write/
 // close file syscalls, and negative fault/container/permission/step-budget checks.
 
+make ir_has(text: str, needle: str) -> num {
+  hold tn = len(text)
+  hold nn = len(needle)
+  when nn == 0 { give 1 }
+  hold i = 0
+  while i + nn <= tn {
+    hold j = 0
+    hold same = 1
+    while j < nn {
+      when sx_index(text, i + j) != sx_index(needle, j) {
+        same = 0
+        j = nn
+      }
+      j = j + 1
+    }
+    when same == 1 { give 1 }
+    i = i + 1
+  }
+  give 0
+}
+
 make fail_t(msg: str) -> num {
   show concat("[FAIL] sxisaexec_test: ", msg)
   hold w = write_file("/dev/stderr", concat(concat("[FAIL] sxisaexec_test: ", msg), "\n"))
@@ -330,6 +351,42 @@ make verify_struct_store_refusals(dir: str) -> num {
     count = count + 1
   }
   give assert_eq_num(count, 6, "struct store refusal count")
+}
+
+// R02: `show <struct>` succeeds on every lane for numeric fields, so a fixture
+// that must still be refused has to be pinned on the C lanes too. Without this,
+// a lowered refusal (or a refusal that silently turned into a numeric print)
+// passed every other gate: the native32 refusal matrix counts files in
+// selfhost/native32_tests/refuse, which is a different lane from seed-min/gen2.
+make verify_c_lane_refusal(dir: str, name: str, sa_path: str, needle: str) -> num {
+  hold stem = concat(dir, concat("/", name))
+  hold err = concat(stem, ".refuse.err")
+  // seed-min (the minimal-seed C lane)
+  hold sm = run_command(concat("./selfhost/seed/sxc_seed_min ", concat(sh_q(sa_path), concat(" >/dev/null 2>", sh_q(err)))))
+  hold sm_ok = assert_eq_num(sm, 1, concat(name, ": seed-min must refuse"))
+  hold sm_text = read_file(err)
+  when ir_has(sm_text, needle) == 0 {
+    hold sm_msg = fail_t(concat(name, concat(": seed-min diagnostic lost ", needle)))
+  }
+  // gen2 (the full-seed C lane) signals a refusal by emitting an "#error" stub
+  // and still exiting 0, so the emitted C is what has to be checked here: the
+  // stub must carry the diagnostic and must not contain a field printf.
+  hold g2_out = concat(stem, ".refuse.gen2.c")
+  hold g2 = run_command(concat("./selfhost/gen2 ", concat(sh_q(sa_path), concat(" ", sh_q(g2_out)))))
+  hold g2_ok = assert_eq_num(g2, 0, concat(name, ": gen2 exit status"))
+  hold g2_text = read_file(g2_out)
+  when ir_has(g2_text, needle) == 0 {
+    hold g2_msg = fail_t(concat(name, concat(": gen2 diagnostic lost ", needle)))
+  }
+  // The runtime prelude mentions %g in its own helpers, so the refusal check
+  // looks for the field line shape ".<field>=%g" the feature would emit.
+  when ir_has(g2_text, ".name=%g") == 1 {
+    hold g2_body = fail_t(concat(name, ": gen2 emitted a numeric print for a refused field"))
+  }
+  when ir_has(g2_text, ".b=%g") == 1 {
+    hold g2_body2 = fail_t(concat(name, ": gen2 emitted a numeric print for a refused field"))
+  }
+  give 1
 }
 
 make verify_six_way(dir: str, name: str, sa_path: str, golden_arm64: str, golden_riscv64: str) -> num {
@@ -1312,13 +1369,16 @@ hold vlistcall_oracle = assert_files_eq("selfhost/native32_tests/list_call.want"
 hold vlistindex = verify_six_way(dir, "list_index", "selfhost/native32_tests/list_index.sa", "selfhost/native32_tests/golden/list_index.arm64.elf", "selfhost/native32_tests/golden/list_index.riscv64.elf")
 hold vlistindex_oracle = assert_files_eq("selfhost/native32_tests/list_index.want", concat(dir, "/list_index.seed.out"), "list index independent oracle")
 hold vstruct = verify_six_way(dir, "struct_num", "selfhost/native32_tests/struct_num.sa", "selfhost/native32_tests/golden/struct_num.arm64.elf", "selfhost/native32_tests/golden/struct_num.riscv64.elf")
-// R02: `show` of a whole struct value. THREE native32 ISAs only, deliberately
-// not six-way: the C lanes (seed-min, gen2, native_aot) still refuse the form
-// with "show value cannot be a struct". Calling verify_six_way here would claim
-// parity the change does not have; the per-ISA goldens and the frozen .want are
-// the evidence for exactly what was implemented.
-hold vstruct_show = verify_native_only_list(dir, "struct_show")
-hold vstruct_show_oracle = assert_files_eq("selfhost/native32_tests/struct_show.want", concat(dir, "/struct_show-i386.elf.out"), "whole-struct show independent oracle")
+// R02: `show` of a whole struct value, now on every lane. The C lanes (seed-min,
+// gen2, native_aot, Portable IR VM, sxc_native) and the three native32 ISAs all
+// print the same "name.field=%g" lines, so this is a full six-way row, not a
+// native-only one: the frozen .want is the oracle every lane is compared to.
+hold vstruct_show = verify_six_way(dir, "struct_show", "selfhost/native32_tests/struct_show.sa", "selfhost/native32_tests/golden/struct_show.arm64.elf", "selfhost/native32_tests/golden/struct_show.riscv64.elf")
+hold vstruct_show_oracle = assert_files_eq("selfhost/native32_tests/struct_show.want", concat(dir, "/struct_show.seed.out"), "whole-struct show independent oracle")
+// The two refusals that bound the feature, pinned on the C lanes as well: a
+// string field and an unresolvable operand must not become numeric output.
+hold vstruct_show_refuse_str = verify_c_lane_refusal(dir, "struct_show_string_field", "selfhost/native32_tests/refuse/struct_show_string_field.sa", "is a string field")
+hold vstruct_show_refuse_unk = verify_c_lane_refusal(dir, "struct_show_unknown_kind", "selfhost/native32_tests/refuse/struct_show_unknown_kind.sa", "missing")
 hold vstruct_oracle = assert_files_eq("selfhost/native32_tests/struct_num.want", concat(dir, "/struct_num.seed.out"), "numeric struct independent oracle")
 hold vstruct_string = verify_six_way(dir, "struct_string", "selfhost/native32_tests/struct_string.sa", "selfhost/native32_tests/golden/struct_string.arm64.elf", "selfhost/native32_tests/golden/struct_string.riscv64.elf")
 hold vstruct_string_oracle = assert_files_eq("selfhost/native32_tests/struct_string.want", concat(dir, "/struct_string.seed.out"), "string struct independent oracle")

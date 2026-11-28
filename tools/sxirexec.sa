@@ -2740,6 +2740,14 @@ make execute_ir(ir_text: str, data: list, patch_bs: list, prog_args: list, dbg_s
         hold ps_s = vm_read_cstr(regs_lo[0], data, stack, heap)
         hold wp = write_out(concat(ps_s, "\n"))
       }
+      when a0 == 6 {
+        // wcstr(A): write the string without a terminator. `show` uses putstr,
+        // which adds the newline; `show <struct>` prints "name.field=" with
+        // wcstr and then the number, so the field line needs a non-terminating
+        // write from this VM too.
+        hold ws_s = vm_read_cstr(regs_lo[0], data, stack, heap)
+        hold wwp = write_out(ws_s)
+      }
       when a0 == 9 {
         // showlist(A) -> "<list len=N>\n"
         hold sl_p = vm_list_resolve(regs_lo[0], data, stack, heap)

@@ -4,8 +4,10 @@ make ng_dispatch() -> num {
   hold d = "selfhost/seed_tests/sxgates/native-test-body"
   hold clean = gl_clean_dir(d)
   hold total = gl_assert_eq_num(ng_fixture_count(), 36, "native source fixture cardinality")
-  hold positive = gl_assert_eq_num(ng_positive_count(), 21, "native output oracle cardinality")
-  hold negative = gl_assert_eq_num(ng_negative_count(), 12, "native compile-refusal cardinality")
+  // R02 moved native_showstruct from the refusal list to the output-oracle list,
+  // so one fixture left the refusal count and joined the oracle count.
+  hold positive = gl_assert_eq_num(ng_positive_count(), 22, "native output oracle cardinality")
+  hold negative = gl_assert_eq_num(ng_negative_count(), 11, "native compile-refusal cardinality")
   hold i = 0
   while i < ng_fixture_count() {
     hold name = ng_fixture_name(i)
@@ -43,6 +45,6 @@ make ng_dispatch() -> num {
   }
   hold ordering = xr_case(2, "selfhost/native_strord_test.sa", kp_join(d, "nso_nat_gate"), ng_want("nso_nat_gate"), "")
   hold growth = xr_case(2, "selfhost/stdlib_growth_test.sa", kp_join(d, "sg_nat_gate"), ng_want("sg_nat_gate"), "")
-  show "[OK] original native-test body: 36 programs, 21 output oracles, 12 compile refusals, runtime bounds, nested/module/function and stdlib parity"
+  show "[OK] original native-test body: 36 programs, 22 output oracles, 11 compile refusals, runtime bounds, nested/module/function and stdlib parity"
   give 0
 }

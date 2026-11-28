@@ -100,9 +100,13 @@ make ng_positive(i: num) -> str {
   when i == 18 { give "native_fn3" }
   when i == 19 { give "native_postmul" }
   when i == 20 { give "native_fnhold" }
+  // R02: `show <struct>` used to be on the refusal list below. It prints now,
+  // so it moved here and is pinned to its exact output like every other
+  // positive fixture.
+  when i == 21 { give "native_showstruct" }
   give ""
 }
-make ng_positive_count() -> num { give 21 }
+make ng_positive_count() -> num { give 22 }
 make ng_want(name: str) -> str {
   when string_eq(name, "native_hello") == 1 { give "42" }
   when string_eq(name, "native_negative") == 1 { give "-42" }
@@ -135,29 +139,28 @@ make ng_want(name: str) -> str {
   when string_eq(name, "nso_nat_gate") == 1 { give "1\n0\n1\n0\n1\n1\n1\n1\n1\n1\n1\n1\n1\n100\n300" }
   when string_eq(name, "sg_nat_gate") == 1 { give "55\n0\n0\n2\n9\n-7\n4\n4\n0\n1\n24\n1\n1\n0\n8\n16\n5\n1\n3\n0\n1\n0\n0\n1\n0\n3\n4\n4\n1000" }
   when string_eq(name, "native_fnhold") == 1 { give "6" }
+  when string_eq(name, "native_showstruct") == 1 { give "q.x=1" }
   give ""
 }
 make ng_negative(i: num) -> str {
   when i == 0 { give "native_undef.sa" }
   when i == 1 { give "native_fld.sa" }
   when i == 2 { give "native_nestfwd.sa" }
-  when i == 3 { give "native_showstruct.sa" }
-  when i == 4 { give "native_nestchain.sa" }
-  when i == 5 { give "nu_miss.sa" }
-  when i == 6 { give "nu_uq.sa" }
-  when i == 7 { give "native_giveout.sa" }
-  when i == 8 { give "native_mkin.sa" }
-  when i == 9 { give "native_fnargs.sa" }
-  when i == 10 { give "native_fnty.sa" }
-  when i == 11 { give "native_fngive.sa" }
+  when i == 3 { give "native_nestchain.sa" }
+  when i == 4 { give "nu_miss.sa" }
+  when i == 5 { give "nu_uq.sa" }
+  when i == 6 { give "native_giveout.sa" }
+  when i == 7 { give "native_mkin.sa" }
+  when i == 8 { give "native_fnargs.sa" }
+  when i == 9 { give "native_fnty.sa" }
+  when i == 10 { give "native_fngive.sa" }
   give ""
 }
-make ng_negative_count() -> num { give 12 }
+make ng_negative_count() -> num { give 11 }
 make ng_diagnostic(name: str) -> str {
   when string_eq(name, "native_undef.sa") == 1 { give "undefined variable" }
   when string_eq(name, "native_fld.sa") == 1 { give "cannot access a field" }
   when string_eq(name, "native_nestfwd.sa") == 1 { give "declare the nested struct first" }
-  when string_eq(name, "native_showstruct.sa") == 1 { give "show of a struct" }
   when string_eq(name, "native_nestchain.sa") == 1 { give "cannot access a field" }
   when string_eq(name, "nu_miss.sa") == 1 { give "cannot open use file" }
   when string_eq(name, "nu_uq.sa") == 1 { give "use needs a quoted path" }

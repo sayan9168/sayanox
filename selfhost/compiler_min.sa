@@ -1392,6 +1392,35 @@ make sxfpkcount(kinds: str) -> num {
   give count
 }
 // Discover concrete declaration identities, not layouts or path aliases.
+// Field names of a struct type in declaration order, from the sdefs record
+// "Type:a,b,c;". Used by `show <struct>`; the C lanes had no way to enumerate a
+// struct's fields before, which is why the whole-value form was refused.
+make sxstructfields(sdefs: str, typename: str) -> str {
+  hold key = concat(typename, ":")
+  hold kn = len(key)
+  hold i = 0
+  hold n = len(sdefs)
+  while i + kn <= n {
+    hold same = 1
+    hold j = 0
+    while j < kn {
+      when sx_index(sdefs, i + j) != sx_index(key, j) {
+        same = 0
+        j = kn
+      }
+      j = j + 1
+    }
+    when same == 1 {
+      hold from = i + kn
+      hold at = from
+      while at < n && sx_index(sdefs, at) != 59 { at = at + 1 }
+      give sxeslice(sdefs, from, at)
+    }
+    i = i + 1
+  }
+  give ""
+}
+
 make sxfstructnames(text: str) -> str {
   hold cached_size_text = len(text)
   hold names = "|"
@@ -16096,8 +16125,61 @@ hold ec = 0
       }
       hold body = concat(body, ind)
       when rk == 3 {
-        hold nerrscop = 1
-        hold scopmsg = "show value cannot be a struct"
+        // R02: show a whole struct value. One printf per numeric field, in
+        // declaration order, with the same "name.field=%g" shape the native32
+        // lanes emit so the lanes agree on the text.
+        //
+        // Field *kinds* are env tag 7, keyed by the struct TYPE name, not the
+        // variable name: the parser records "|Type.field=" + kind + "|" while it
+        // builds the struct value, so the same type reached through two
+        // variables shares one record. Kinds are 0 num, 1 str, 2:<Type> nested,
+        // 3 list.
+        //
+        // A field that is not a number is refused by name. Printing a pointer as
+        // %g would be wrong output, not partial output.
+        // A struct-returning *call* has no field lvalues: there is no variable
+        // to name in "x.field". It is refused rather than lowered, because the
+        // only C it could produce (copy_point.x) does not compile.
+        hold svf = ""
+        when iscall == 0 {
+          hold svf = sxstructfields(sdefs, stname)
+        }
+        hold svenv = sxfenv(decls, sdecls, ldecls, svars, fsret, fspk, ftypes, inprivate)
+        when iscall == 1 {
+          hold nerrscop = 1
+          hold scopmsg = "cannot show a struct returned by a call; hold it in a variable first"
+        }
+        hold svpos = 0
+        while svpos <= len(svf) {
+          hold svend = svpos
+          while svend < len(svf) && sx_index(svf, svend) != 44 { svend = svend + 1 }
+          hold svname = sxeslice(svf, svpos, svend)
+          svpos = svend + 1
+          when len(svname) > 0 && nerrscop == 0 {
+            hold svkraw = sxeenvlookup(svenv, 7, concat(concat(stname, "."), svname), "=")
+            hold svkind = 48
+            when len(svkraw) > 0 {
+              hold svkind = sx_index(svkraw, 0)
+            }
+            when svkind == 48 {
+              hold body = concat(body, "printf(\"")
+              hold body = concat(body, concat(nm2, "."))
+              hold body = concat(body, svname)
+              hold body = concat(body, "=%g\\n\", (double)")
+              hold body = concat(body, nm2)
+              hold body = concat(body, ".")
+              hold body = concat(body, svname)
+              hold body = concat(body, ");")
+              hold body = concat(body, nl)
+            } otherwise {
+              hold nerrscop = 1
+              hold svwhy = "a string field"
+              when svkind == 51 { hold svwhy = "a list field" }
+              when svkind == 50 { hold svwhy = "a nested struct field" }
+              hold scopmsg = concat("cannot show struct '", concat(nm2, concat("': field '", concat(svname, concat("' is ", concat(svwhy, ""))))))
+            }
+          }
+        }
       }
       when rk == 2 && nerrscop == 0 && seed_profile == 0 {
         // A list is a pointer-valued runtime object, not a number to cast for

@@ -84,7 +84,7 @@ tracked file with `git check-attr`: all 173 `.sa` files (167 existing plus the
 
 The generated-artifact rules mark the remaining tracked chunk files and cover:
 
-- `*.b64` — the 121 chunks in `selfhost/compiler_min_gz/`, the offline copy of
+- `*.b64` — the 151 chunks in `selfhost/compiler_min_gz/`, the offline copy of
   `selfhost/compiler_min.sa` that the restore path falls back to
 - `*.part`, `*.cpart` — other split fragments
 
