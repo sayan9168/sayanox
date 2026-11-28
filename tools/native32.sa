@@ -5715,6 +5715,75 @@ make emit_statements() -> num {
             strcall_text = shown
             act = 16
           }
+          // show <structname>: a whole struct value. Tested before the generic
+          // expression path, which reports "unknown name" because only the
+          // struct's fields are bound, never the struct itself.
+          //
+          // Each field becomes two existing shapes: a string literal for
+          // "name.field=" and a decimal print for the value. Nothing new is
+          // invented in the emitter, so the output format is exactly the
+          // language's own `show` concatenation, and a field value is read from
+          // the same slot `name.field` already resolves to.
+          when act == 0 && is_bare_name(shown) == 1 && slot_of(listnames, concat("$", shown)) >= 0 {
+            hold sv_ti = slot_of(listnames, concat("$", shown))
+            hold sv_row = struct_type_row(sv_ti)
+            hold sv_n = struct_field_count(sv_row)
+            hold sv_i = 0
+            while sv_i < sv_n {
+              hold sv_fn = struct_field_name(sv_row, sv_i)
+              hold sv_enc = slot_of(sv_row, sv_fn)
+              hold sv_kind = (sv_enc - sv_enc % 32) / 32
+              hold sv_lab = concat(concat(shown, "."), sv_fn)
+              when sv_kind == 0 {
+                hold sv_unk = fail(1, concat(concat(concat("line ", numstr(lineno)), ": cannot show struct '"), concat(concat(shown, "' because field '"), concat(sv_fn, "' has no established type"))))
+              }
+              when sv_kind == 2 {
+                hold sv_str = fail(1, concat(concat(concat("line ", numstr(lineno)), ": showing a struct with a string field is not supported: '"), concat(sv_lab, "'")))
+              }
+              // "label=" as a string literal, exactly as `show "..."` emits it.
+              hold sv_lo = len(data)
+              data = append_text(data, concat(sv_lab, "="))
+              hold sv_lb = len(data) - sv_lo
+              when arch == 0 {
+                code = e1(code, 184)
+                code = e32(code, 4)
+                code = e1(code, 187)
+                code = e32(code, 1)
+                code = e1(code, 185)
+                fixsite = push(fixsite, len(code))
+                fixoff = push(fixoff, sv_lo)
+                code = e32(code, 0)
+                code = e1(code, 186)
+                code = e32(code, sv_lb)
+                code = e1(code, 205)
+                code = e1(code, 128)
+              } otherwise {
+                when sv_lb > 65535 {
+                  hold sv_big = fail(1, "a struct field label of 64 KiB or more")
+                }
+                fixsite = push(fixsite, len(code))
+                fixoff = push(fixoff, sv_lo)
+                when arch == 2 {
+                  code = rv_li32(code, 11, 0)
+                  code = rv_li32(code, 12, sv_lb)
+                  code = e_w(code, rv_i(1, 0, 0, 10, 19))
+                  code = e_w(code, rv_i(64, 0, 0, 17, 19))
+                  code = e_w(code, 115)
+                } otherwise {
+                  code = a_addr(code, 1)
+                  code = a_movz(code, 0, 2, sv_lb)
+                  code = a_movz(code, 1, 0, 1)
+                  code = a_movz(code, 1, 8, 64)
+                  code = e_w(code, 3556769793)
+                }
+              }
+              // The field's value on the stack, then the decimal print.
+              code = emit_load_var(code, arch, slot_of(names, concat(concat(shown, "."), sv_fn)))
+              code = emit_call(code, arch, 0)
+              sv_i = sv_i + 1
+            }
+            act = 19
+          }
           hold shown_slot = slot_of(names, shown)
           when act == 0 && shown_slot >= 0 && slot_of(strnames, shown) >= 0 {
             slot = shown_slot

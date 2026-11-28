@@ -196,7 +196,9 @@ make xc_containers(d: str, arch: str) -> num {
       }
     }
   }
-  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 105)
+  // 105 - struct_whole_value (now a feature, moved to struct_show.sa)
+  //   + struct_show_string_field + struct_show_unknown_kind = 106
+  hold refusals = xc_refusals("selfhost/native32_tests/refuse", d, arch, 0, 106)
   hold struct_refusals = xc_refusals("selfhost/native32_tests/struct_mutation_refuse", d, arch, 0, 6)
   hold string_struct_refusals = xc_refusals("selfhost/native32_tests/struct_string_refuse", d, arch, 0, 9)
   hold string_init_refusals = xc_refusals("selfhost/native32_tests/struct_string_initializer_refuse", d, arch, 0, 3)
