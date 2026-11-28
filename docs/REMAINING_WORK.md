@@ -84,12 +84,17 @@ with a frozen `.want`, two new refusals were added, and the matrix moved
 `test-sxisaexec` pass with an independent oracle, deterministic i386 images and
 reviewed ARM/RV goldens at 8284 bytes.
 
-**The C lanes still refuse this form.** `seed-min`, `gen2` and `native_aot`
-report `show value cannot be a struct`; closing that needs the field kinds at
-the `show` site in `selfhost/compiler_min.sa` plus `sxc_seed_min.sa`,
-`native_aot.sa` and `compiler_text.sa`. Six-way parity is therefore not claimed,
-and `verify_six_way` is deliberately not called for this fixture. Nested structs,
-string fields and any format control remain open. R02 is not closed.
+**The C lanes now print this form too.** `seed-min`, `gen2`, `native_aot`,
+`sxc_native` and the Portable IR VM all emit one `name.field=<value>` line per
+numeric field, in declaration order, matching the native32 lanes, so
+`struct_show` is a full `verify_six_way` row with the frozen `.want` as the
+oracle on every lane. The refusal list shrank by one fixture in the original
+native-test matrix: `native_showstruct` moved from the refusal list to the
+output-oracle list and is pinned to `q.x=1`.
+
+What stays open in R02: nested-struct fields, string fields and list fields are
+still refused *by name* rather than printed, a struct returned by a call must be
+held in a variable first, and there is no format control. R02 is not closed.
 
 ## Local R02 increment: string-field initializer parity (2026-11-19)
 

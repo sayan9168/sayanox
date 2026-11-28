@@ -194,8 +194,14 @@ make pg_test_nest() -> num {
   hold p47 = pg_emit_stream(1, "selfhost/seed_tests/ts_nestmiss.sa", "selfhost/seed_tests/ts_nestmiss_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_nestmiss_g2.c.err")
   hold p48 = pg_contains("selfhost/seed_tests/ts_nestmiss_g2.c", "is not a struct")
   hold p49 = gl_must_write("selfhost/seed_tests/ts_nestshow.sa", "struct Point {\n  x\n}\nhold q = Point { x: 1 }\nshow q\n")
-  hold p50 = pg_emit_stream(1, "selfhost/seed_tests/ts_nestshow.sa", "selfhost/seed_tests/ts_nestshow_g2.c", 1, "/dev/null", "selfhost/seed_tests/ts_nestshow_g2.c.err")
-  hold p51 = pg_contains("selfhost/seed_tests/ts_nestshow_g2.c", "show value cannot be a struct")
+  hold p50 = pg_emit_stream(1, "selfhost/seed_tests/ts_nestshow.sa", "selfhost/seed_tests/ts_nestshow_g2.c", 0, "/dev/null", "selfhost/seed_tests/ts_nestshow_g2.c.err")
+  // R02: `show <struct>` used to be a refusal on the C lanes. It now prints one
+  // "name.field=%g" line per numeric field, so the gate asserts the behaviour
+  // instead of the retired diagnostic: the emitted C must carry the field
+  // printf, and the compiled program must actually print the value.
+  hold p51 = pg_contains("selfhost/seed_tests/ts_nestshow_g2.c", "q.x=%g")
+  hold p52 = gl_compile_c("selfhost/seed_tests/ts_nestshow_g2.c", "selfhost/seed_tests/ts_nestshow_g2", "-O2")
+  hold p53 = gl_assert_out("./selfhost/seed_tests/ts_nestshow_g2", "q.x=1", "selfhost/seed_tests/sxported.stdout")
   give 0
 }
 

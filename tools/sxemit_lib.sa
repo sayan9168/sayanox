@@ -3380,6 +3380,7 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
       when done == 0 && mkw_st(src, st, "show") == 1 {
         done = 1
         hold zs = sw_st(src, st)
+        hold show_at = st[0]
         est = emit_rhs(src, st, pool, est, data)
         when st[30] == 0 {
           est = callb(est, 22)
@@ -3390,7 +3391,96 @@ make emit_prog(src: str, st: list, pool: list, est: list, data: list, lp_st: lis
             when st[30] == 2 {
               est = callb(est, 9)
             } otherwise {
-              hold esh = fail(1, "show of a struct value is not supported")
+              when st[30] == 3 {
+                // R02: show a whole struct value on the native_aot lane. The
+                // value is already a struct in st[31]; print one
+                // "name.field=<num>" line per numeric field, in declaration
+                // order, to match the C lanes and the native32 lanes.
+                //
+                // A non-numeric field is refused by name: its C counterpart
+                // holds a pointer/length pair, and printing that as a number
+                // would be wrong output rather than partial output.
+                hold zsh2 = sw_st(src, st)
+                // `show` was already matched at the statement start, so the
+                // operand identifier sits right after it; pid_st reads from
+                // st[0], which the RHS emitter has already consumed.
+                hold sh_save = st[0]
+                st[0] = show_at
+                hold sh_var = pid_st(src, st)
+                hold sh_after = sw_st(src, st)
+                hold sh_is_call = 0
+                when at(src, sn, st[0]) == 40 {
+                  sh_is_call = 1
+                }
+                st[0] = sh_save
+                // A struct-returning call has no field lvalues to name, so the
+                // line could only be labelled with the callee's name. The C
+                // lanes refuse this form; refuse it here too rather than emit a
+                // label that names a function.
+                when sh_is_call == 1 {
+                  hold esh6 = fail(1, "cannot show a struct returned by a call; hold it in a variable first")
+                }
+
+                hold sh_sid = st[31]
+                when sh_sid < 0 {
+                  hold esh0 = fail(1, "cannot show a struct value whose type is not known here")
+                }
+                hold sh_sb = s_base(sh_sid)
+                hold sh_cnt = st[sh_sb + 1]
+                // emit_rhs left the struct pointer in rax. Keep one copy on
+                // the stack and reload it into a callee-saved register per
+                // field: the print builtins clobber every caller-saved
+                // register, so neither rax nor r11 survives a print.
+                est = push_r(est, 0)
+                hold fi2 = 0
+                while fi2 < sh_cnt {
+                  // s_field is the authority on where a field name lives; the
+                  // loop counter is not the slot index once a struct has been
+                  // reordered or extended.
+                  hold fn_slot2 = sh_sb + 4 + fi2
+                  hold fn_sh = unintern(pool, st[fn_slot2])
+                  hold fi_sh = s_field(st, pool, sh_sid, fn_sh)
+                  when fi_sh >= 0 {
+                    fn_slot2 = sh_sb + 4 + fi_sh
+                    fn_sh = unintern(pool, st[fn_slot2])
+                  }
+                  hold fk_sh = st[sh_sb + 20 + fi2]
+                  when fk_sh != 0 {
+                    when fk_sh == 1 {
+                      hold esh2 = fail(1, concat("cannot show struct '", concat(sh_var, concat("': field '", concat(fn_sh, "' is a string field")))))
+                    }
+                    when fk_sh == 2 {
+                      hold esh3 = fail(1, concat("cannot show struct '", concat(sh_var, concat("': field '", concat(fn_sh, "' is a nested struct field")))))
+                    }
+                    when fk_sh == 3 {
+                      hold esh4 = fail(1, concat("cannot show struct '", concat(sh_var, concat("': field '", concat(fn_sh, "' is a list field")))))
+                    }
+                    hold esh5 = fail(1, concat("cannot show struct '", concat(sh_var, concat("': field '", concat(fn_sh, "' is a field with no established type")))))
+                  }
+                  // One line per field: "var.field=" then the number. Both
+                  // print builtins append their own newline, so the label ends
+                  // at "=" and shownum terminates the line.
+                  hold lbl = concat(sh_var, concat(".", fn_sh))
+                  lbl = concat(lbl, "=")
+                  hold loff2 = d_next_off(data)
+                  data = d_str_alloc(data, lbl)
+                  // putstr terminates with a newline; wcstr does not. The
+                  // label goes out with wcstr and the number with shownum, which
+                  // supplies the line's single newline.
+                  est = pop_r(est, 13)
+                  est = push_r(est, 13)
+                  est = lea_rm(est, 0, 12, neg1, 0, loff2)
+                  est = callb(est, 6)
+                  est = mv_r64m(est, 0, 13, neg1, 0, 8 * fi2)
+                  est = callb(est, 22)
+                  fi2 = fi2 + 1
+                }
+                est = pop_r(est, 13)
+                st[30] = 0
+                st[31] = 0 - 1
+              } otherwise {
+                hold esh = fail(1, "show of a struct value is not supported")
+              }
             }
           }
         }
